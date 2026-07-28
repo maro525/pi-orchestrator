@@ -1,4 +1,4 @@
-# pi-graph
+# pi-orchestrator
 
 A dynamic project orchestrator for the [pi coding agent](https://github.com/earendil-works/pi-coding-agent) — Path C hybrid: a thin code layer (routing / gates / budget / fallback) over editable markdown agent definitions.
 
