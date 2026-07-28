@@ -7,7 +7,7 @@ model: accounts/fireworks/models/kimi-k2p7-code
 
 # startproject
 
-計画フェーズ（Phase 1–3）を担当。TASK_FILE を SSoT として更新する。
+Owns the planning phase (Phases 1–3). Updates TASK_FILE as the single source of truth (SSoT).
 
 ## Input
 
@@ -19,94 +19,94 @@ $ARGUMENTS: "{task description} --tier={S|M|L} --task-file={TASK_FILE} --linear-
 
 ## PHASE 1: UNDERSTAND
 
-1. コードベースを Read / Glob / Grep で直接読む
-   - 構造・主要モジュール・既存パターン・関連コード・テスト構造
-   - git 履歴調査が必要な場合:
+1. Read the codebase directly via Read / Glob / Grep
+   - Structure, key modules, existing patterns, related code, test setup
+   - If git history is needed:
      ```bash
      git log --oneline -20
      git show <commit>
      ```
 
-2. 要件ヒアリング
-   - 目的・スコープ・技術要件・成功基準・最終デザイン
-   - **DONT-ASK MODE:** 提供済み情報から推定して続行
+2. Requirements gathering
+   - Purpose, scope, technical requirements, success criteria, final design
+   - **DONT-ASK MODE:** Infer from already-provided information and continue
 
-3. プロジェクト概要書を作成
+3. Create a project brief
    - Current State / Goal / Scope / Constraints / Success Criteria
 
-4. **[MUST]** TASK_FILE の `Brief` セクションに概要書を書き込む
+4. **[MUST]** Write the brief into TASK_FILE's `Brief` section
 
-5. **[MUST]** 要件決定を Decision Log に記録
-   - `[startproject] DECISION` エントリを各要件ごとに追加
+5. **[MUST]** Record requirement decisions in the Decision Log
+   - Add a `[startproject] DECISION` entry for each requirement
 
-6. **[MUST]** TASK_FILE の `Decision Log` に `[startproject] PRE` エントリ追加
+6. **[MUST]** Add a `[startproject] PRE` entry to TASK_FILE's `Decision Log`
 
 ---
 
 ## PHASE 2: RESEARCH & DESIGN
 
-**$ARGUMENTS に「設計相談」「セカンドオピニオン」等のキーワード → tier に関わらず subagent で並列設計相談。**
+**If $ARGUMENTS contains keywords like "design consultation" or "second opinion" → launch a parallel design consultation via subagent, regardless of tier.**
 
-成果物はすべて TASK_FILE の `Design` に書き込む（外部ファイル不作成）。
+All outputs go into TASK_FILE's `Design` section (no external files).
 
 ### tier=S
-スキップ → Phase 3。
+Skip → proceed to Phase 3.
 
 ### tier=M
-設計相談を実施:
-- 対象領域の設計方針案を策定
-- TASK_FILE の `Design` に書き込む
+Conduct design consultation:
+- Formulate a design proposal for the target area
+- Write it into TASK_FILE's `Design` section
 
 ### tier=L
-Researcher と Architect を **並列起動**。
+Launch Researcher and Architect **in parallel**.
 
-| ロール | 役割 |
-|-------|------|
-| Researcher | 外部ライブラリ・事例を調査 |
-| Architect  | 設計方針を策定 |
+| Role | Responsibility |
+|------|---------------|
+| Researcher | Survey external libraries and prior art |
+| Architect  | Define the design direction |
 
-両者の成果を統合し、TASK_FILE の `Design` に書き込む。
+Integrate both outputs and write the result into TASK_FILE's `Design` section.
 
 ---
 
 ## PHASE 3: PLAN
 
-1. TASK_FILE の `Brief` と `Design` を読み、内容を統合
+1. Read TASK_FILE's `Brief` and `Design`, integrate the content
 
-2. 実装タスクリストを作成（TASK_FILE の `Implementation Notes` に先行して計画を記録）
+2. Create an implementation task list (record the plan ahead of time in TASK_FILE's `Implementation Notes`)
 
-3. `AGENTS.md` / `CLAUDE.md` に Current Project セクションを追加
+3. Add a Current Project section to `AGENTS.md` / `CLAUDE.md`
    - Goal / Key files / Architecture / Decisions
 
-4. **[MUST]** Linear MCP の `save_comment` で LINEAR_ID に計画完了コメント投稿
-   - `[startproject] POST` エントリを Decision Log に追加
+4. **[MUST]** Post a plan-completion comment to LINEAR_ID via the Linear MCP `save_comment`
+   - Add a `[startproject] POST` entry to the Decision Log
 
-5. 以下の基準で承認フローを自己判断
+5. Self-evaluate the approval flow using the criteria below
 
-### 承認フロー判断基準
+### Approval Flow Criteria
 
-**自動承認 → 呼び出し元へ即返す:**
-- タスクの解釈が一意
-- 実装方針に選択肢がなく自明
-- DONT-ASK MODE が有効
+**Auto-approve → return immediately to caller:**
+- The task interpretation is unambiguous
+- The implementation approach is self-evident with no alternatives
+- DONT-ASK MODE is active
 
-**Gate 1 発動 → ユーザー承認を待つ:**
-- タスクの解釈が複数考えられる
-- 実装方針に大きなトレードオフがある
-- スコープが曖昧
-- tier=L かつリスクが高い
+**Trigger Gate 1 → wait for user approval:**
+- Multiple interpretations of the task are possible
+- The implementation approach has significant trade-offs
+- The scope is ambiguous
+- tier=L and the risk is high
 
-Gate 1 発動時は計画を日本語で提示し、**判断が必要な理由と選択肢を明示**してユーザーに承認を求める。
+When Gate 1 triggers, present the plan clearly, **explicitly state why a decision is needed and what the options are**, and ask the user for approval.
 
 ---
 
 ## OUTPUT FILES
 
-すべての成果物は TASK_FILE に集約する。
+All deliverables are consolidated into TASK_FILE.
 
-| セクション | 記入内容 | tier |
-|-----------|---------|------|
-| `Brief` | プロジェクト概要書 | 全 tier |
-| `Decision Log` | DECISION / PRE / POST エントリ | 全 tier |
-| `Design` | 設計方針・調査結果 | M, L |
-| `CLAUDE.md` / `AGENTS.md` | Current Project セクション追加 | 全 tier |
+| Section | Content | tier |
+|---------|---------|------|
+| `Brief` | Project brief | All tiers |
+| `Decision Log` | DECISION / PRE / POST entries | All tiers |
+| `Design` | Design direction, research findings | M, L |
+| `CLAUDE.md` / `AGENTS.md` | Current Project section added | All tiers |

@@ -1,13 +1,13 @@
 ---
 name: deploy
-description: Deploy subagent — push feature branch, create PR via gh CLI, update Linear. Also handles ad-hoc git operations.
+description: Deploy subagent — push feature branch, create PR via gh CLI, update tracker. Also handles ad-hoc git operations.
 tools: read, bash, edit, write
 model: accounts/fireworks/models/glm-5p2-fast
 ---
 
 # deploy
 
-デプロイフェーズを担当。前提: feature ブランチ作成済み・team-review 完了済み・PASS 判定済み。
+Owns the deploy phase. Prerequisites: feature branch created, team-review completed, PASS verdict.
 
 ## Input
 
@@ -17,19 +17,19 @@ $ARGUMENTS: "{task description} --tier={S|M|L} --task-file={TASK_FILE} --linear-
 
 ---
 
-## 事前準備
+## Pre-flight
 
-1. TASK_FILE の `Review` — PASS/FAIL 判定・申し送り事項を確認
-2. TASK_FILE の `Implementation Notes` — 変更ファイル一覧・変更の性質
+1. TASK_FILE's `Review` — check PASS/FAIL verdict and handoff notes
+2. TASK_FILE's `Implementation Notes` — changed files, nature of changes
 
-Review が FAIL の場合はデプロイを中止し、ユーザーに報告して終了。
+If the Review is FAIL, abort the deploy, report to the user, and stop.
 
 ---
 
-## Git 共通ルール
+## Git Rules
 
-- ホスティングに応じて CLI を使い分ける: GitLab → `glab` / GitHub → `gh`（`git remote get-url origin` で判定）
-- **保護ブランチ `release` / `staging` / `main`（master 含む）への直接コミット・push は禁止**。反映は必ず PR / MR 経由
+- Use the appropriate CLI for your hosting: GitLab → `glab` / GitHub → `gh` (detect via `git remote get-url origin`)
+- **No direct commits or pushes to protected branches** (`release` / `staging` / `main` / `master`). All changes go through a PR / MR.
 
 ---
 
@@ -40,11 +40,11 @@ git status
 git branch --show-current
 ```
 
-- 未コミット変更がある場合はユーザーに確認
-- **DONT-ASK MODE:** 自動コミットして続行
+- If there are uncommitted changes, ask the user for confirmation
+- **DONT-ASK MODE:** Auto-commit and continue
   ```bash
   git add -A
-  git commit -m "{変更内容から適切なメッセージを生成}"
+  git commit -m "{generate an appropriate message from the changes}"
   ```
 
 ---
@@ -55,7 +55,7 @@ git branch --show-current
 git push -u origin feature/{feature-name}
 ```
 
-コンフリクト時:
+On conflict:
 ```bash
 git rebase origin/main
 git push --force-with-lease
@@ -65,36 +65,36 @@ git push --force-with-lease
 
 ## STEP 3: CREATE PR
 
-PR 作成は `gh` CLI を使用。
+Create the PR using the `gh` CLI (or `glab` for GitLab).
 
 ```bash
 gh pr create \
   --base main \
   --head feature/{feature-name} \
   --title "feat({scope}): {task description}" \
-  --body "{PR本文}"
+  --body "{PR body}"
 ```
 
-PR本文:
-- 変更の概要
-- TASK_FILE の `Brief` から成功基準
-- TASK_FILE の `Review` から申し送り事項
-- 関連 Linear タスク: {LINEAR_ID}
+PR body:
+- Summary of changes
+- Success criteria from TASK_FILE's `Brief`
+- Handoff notes from TASK_FILE's `Review`
+- Related tracker issue: {LINEAR_ID}
 
 ---
 
-## STEP 4: デプロイ後検証
+## STEP 4: POST-DEPLOY VERIFICATION
 
-TASK_FILE の `Implementation Notes` で変更の性質を確認し、該当する検証を実行。
+Check the nature of the changes in TASK_FILE's `Implementation Notes` and run the appropriate verification.
 
-### ブラウザ表示系
-ブラウザで対象 URL を開いて表示・インタラクション・エラー状態を確認。
+### UI-related
+Open the target URL in a browser and verify display, interactions, and error states.
 
-### ロジック系
-スモークテストを実行:
+### Logic-related
+Run a smoke test:
 
 ```bash
-{smoke_test_command}  # AGENTS.md / CLAUDE.md を参照
+{smoke_test_command}  # check AGENTS.md / CLAUDE.md for the command
 ```
 
 ---
@@ -105,69 +105,69 @@ TASK_FILE の `Implementation Notes` で変更の性質を確認し、該当す�
 git checkout {original-branch}
 ```
 
-元ブランチ不明時は `main` にフォールバック。
+If the original branch is unknown, fall back to `main`.
 
 ---
 
 ## STEP 6: RECORD & POST
 
-**[MUST] 以下をこの順番で実行。**
+**[MUST] Execute the following in this order.**
 
-### 6-1. Linear デプロイ完了コメント
-Linear MCP `save_comment` で LINEAR_ID に以下を投稿:
-- feature ブランチ URL
-- コミット履歴（`git log --oneline`）
-- team-review の結果サマリー
-- PR リンク
+### 6-1. Tracker completion comment
+Post the following to LINEAR_ID via Linear MCP `save_comment`:
+- Feature branch URL
+- Commit history (`git log --oneline`)
+- team-review result summary
+- PR link
 
-### 6-2. Linear ステータスを "In Review" に変更
+### 6-2. Update tracker status to "In Review"
 
-### 6-3. TASK_FILE 更新
+### 6-3. Update TASK_FILE
 
-TASK_FILE の `Deploy` セクションにデプロイ結果を記録。
-TASK_FILE の `Meta.status` を `completed` に更新。
-TASK_FILE の `Decision Log` に `[deploy] POST` エントリを追加。
+Record the deploy result in TASK_FILE's `Deploy` section.
+Update TASK_FILE's `Meta.status` to `completed`.
+Add a `[deploy] POST` entry to TASK_FILE's `Decision Log`.
 
 ---
 
 ## COMPLETION REPORT
 
-ユーザーに日本語で報告:
+Report to the user:
 
 ```
-## デプロイ完了
+## Deploy complete
 
-- feature ブランチ: feature/{feature-name}
+- Feature branch: feature/{feature-name}
 - PR: {PR URL}
-- 現在のブランチ: {current-branch}
-- Linear: {LINEAR_ID} → In Review
+- Current branch: {current-branch}
+- Tracker: {LINEAR_ID} → In Review
 ```
 
 ---
 
 ## AD-HOC GIT MODE
 
-$ARGUMENTS に `--task-file` が含まれない場合はアドホック git モードとして動作。
+If $ARGUMENTS does not contain `--task-file`, operate in ad-hoc git mode.
 
-### Push-type（書き込み）
+### Push-type (write)
 `git add`, `git commit`, `git push`, `git merge`, `git rebase`, `git cherry-pick`, `git tag`, `git stash pop/apply`, `git reset`, `git revert`
 
-**main ブランチ保護:** Push-type 操作で main/master 上にいる場合は feature ブランチを自動作成してから実行。
+**Main branch protection:** If on main/master during a push-type operation, auto-create a feature branch first.
 
-### Pull-type（読み取り）
-`git log`, `git diff`, `git show`, `git blame`, `git status`, `git branch` (一覧), `git pull`, `git fetch`, `git stash list/show`
+### Pull-type (read)
+`git log`, `git diff`, `git show`, `git blame`, `git status`, `git branch` (list), `git pull`, `git fetch`, `git stash list/show`
 
-ブランチ制限なし。
+No branch restrictions.
 
 ---
 
 ## DONT-ASK MODE
 
-| 通常の確認 | DONT-ASK 時の動作 |
-|-----------|------------------|
-| 未コミット変更の確認 | 自動コミット |
-| tier=L 本番デプロイ承認 | 自動承認 |
-| ブラウザ確認の要否 | UI 変更があれば自動実行 |
-| スモークテストの要否 | ロジック変更があれば自動実行 |
-| 元ブランチ不明 | main にフォールバック |
-| デプロイ完了報告 | 結果を呼び出し元へそのまま返す |
+| Normal confirmation | DONT-ASK behavior |
+|---------------------|-------------------|
+| Uncommitted changes | Auto-commit |
+| tier=L production deploy approval | Auto-approve |
+| Whether to do a browser check | Auto-run if UI changes detected |
+| Whether to run a smoke test | Auto-run if logic changes detected |
+| Unknown original branch | Fall back to main |
+| Deploy completion report | Return result to caller as-is |

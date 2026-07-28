@@ -7,7 +7,7 @@ model: accounts/fireworks/models/glm-5p2
 
 # team-review
 
-レビューフェーズを担当。
+Owns the review phase.
 
 ## Input
 
@@ -17,138 +17,138 @@ $ARGUMENTS: "{task description} --tier={S|M|L} --task-file={TASK_FILE} --linear-
 
 ---
 
-## 事前準備
+## Pre-flight
 
-1. TASK_FILE の `Brief` — スコープ・成功基準
-2. TASK_FILE の `Design` — 設計方針・意図
-3. TASK_FILE の `Implementation Notes` — 実装サマリー・申し送り
-4. 変更ファイル一覧を `git diff` / Read で確認
+1. TASK_FILE's `Brief` — scope, success criteria
+2. TASK_FILE's `Design` — design direction, intent
+3. TASK_FILE's `Implementation Notes` — implementation summary, handoff notes
+4. Review the changed files via `git diff` / Read
 
-**[MUST]** Linear MCP `save_comment` でレビュー開始コメント投稿（ステータス → In Progress）。
+**[MUST]** Post a review-start comment via Linear MCP `save_comment` (status → In Progress).
 
-変更の性質を判定:
+Determine the nature of the change:
 
-| 性質 | 判定基準 | 検証方法 |
-|------|---------|---------|
-| ブラウザ表示系 | UI / CSS / レイアウト変更 | ブラウザ確認（manual or mcp） |
-| ロジック系 | ビジネスロジック・API・データ処理 | テスト実行 |
+| Nature | Criteria | Verification |
+|--------|---------|--------------|
+| UI-related | UI / CSS / layout changes | Browser check (manual or MCP) |
+| Logic-related | Business logic / API / data processing | Test execution |
 
 ---
 
-## STEP 1: コードレビュー（並列）
+## STEP 1: Code Review (Parallel)
 
-**tier ごとのレビュアー構成:**
+**Reviewer composition per tier:**
 
-| tier | レビュアー |
+| tier | Reviewers |
 |------|----------|
-| S (mode=self-review) | Quality Reviewer のみ |
+| S (mode=self-review) | Quality Reviewer only |
 | M | Quality + Security |
 | L | Quality + Logic + Security + Simplify |
 
 ### Quality Reviewer
-変更ファイルを Read してレビュー。
-観点: 可読性・命名・重複・SOLID原則。
+Read changed files and review.
+Focus: readability, naming, duplication, SOLID principles.
 
 ### Logic Reviewer
-観点: バグ・エッジケース・エラーハンドリング。
+Focus: bugs, edge cases, error handling.
 
 ### Security Reviewer
-`.claude/rules/security.md` を Read し、記載ルールに従って変更ファイルをチェック。
+Read `.claude/rules/security.md` and check changed files against the documented rules.
 
-観点:
-- 認証・認可の抜け
-- 入力バリデーション・サニタイズ
-- 機密情報のハードコード
-- SQL インジェクション・XSS 等の脆弱性
+Focus:
+- Authentication / authorization gaps
+- Input validation / sanitization
+- Hardcoded secrets
+- Vulnerabilities (SQL injection, XSS, etc.)
 
 ### Simplify Reviewer
-観点: 過剰な複雑さ・不要な抽象化・デッドコード・リファクタ提案。
+Focus: excessive complexity, unnecessary abstraction, dead code, refactoring suggestions.
 
 ---
 
-## STEP 2: Lead による統合
+## STEP 2: Lead Integration
 
-- 重複指摘は1件にまとめ severity を引き上げ
-- 矛盾する指摘はより厳しい方を採用
-- minor 指摘は申し送り事項へ
-
----
-
-## STEP 3: 動作検証
-
-### ブラウザ表示系 → ブラウザ確認
-- 対象ページをユーザーに開いてもらうか、Playwright MCP があれば自動化
-- レイアウト・インタラクション・エラー状態を確認
-
-### ロジック系 → テスト実行
-プロジェクトのテストコマンドを `AGENTS.md` / `package.json` / `pyproject.toml` から確認して実行。
-
-観点:
-- 全テスト通過か
-- 新規実装に対応するテストが存在するか
-- カバレッジに明らかな欠落がないか
+- Merge duplicate findings into one and raise severity
+- For conflicting findings, adopt the stricter one
+- Move minor findings to handoff notes
 
 ---
 
-## STEP 4: 判定
+## STEP 3: Verification
 
-| severity | 定義 | 判定 |
-|---------|-----|-----|
-| critical | セキュリティ脆弱性・データ破損・テスト失敗 | FAIL 確定 |
-| major    | バグ・大きな設計問題・表示崩れ | FAIL |
-| minor    | 改善提案・命名・リファクタ推奨 | PASS（申し送り） |
+### UI-related → Browser check
+- Open the target page (ask the user, or use Playwright MCP if available)
+- Verify layout, interactions, error states
 
-- **PASS** — critical / major がゼロ
-- **FAIL** — critical または major が1件以上
+### Logic-related → Test execution
+Find the project's test command from `AGENTS.md` / `package.json` / `pyproject.toml` and run it.
+
+Focus:
+- Do all tests pass?
+- Do tests exist for the new implementation?
+- Is there obvious coverage gaps?
+
+---
+
+## STEP 4: Verdict
+
+| Severity | Definition | Verdict |
+|---------|-----------|---------|
+| critical | Security vulnerability, data corruption, test failure | FAIL (confirmed) |
+| major | Bug, significant design issue, visual breakage | FAIL |
+| minor | Improvement suggestion, naming, refactoring recommendation | PASS (handoff) |
+
+- **PASS** — zero critical / major findings
+- **FAIL** — one or more critical / major findings
 
 ---
 
 ## OUTPUT
 
-TASK_FILE の `Review` セクション:
+TASK_FILE's `Review` section:
 
 ```markdown
 ## Review
 
-### 判定: PASS / FAIL
+### Verdict: PASS / FAIL
 
-### コードレビュー統合結果
+### Code Review Integration
 
 #### Quality Reviewer
-- [severity] 指摘内容
+- [severity] finding
 
 #### Logic Reviewer
-- [severity] 指摘内容
+- [severity] finding
 
 #### Security Reviewer
-- [severity] 指摘内容（security.md ルール参照）
+- [severity] finding (per security.md rules)
 
 #### Simplify Reviewer
-- [severity] 指摘内容
+- [severity] finding
 
-#### 統合サマリー
-- 複数レビュアー共通の指摘（severity 引き上げ）
-- 個別の指摘
+#### Integration Summary
+- Findings common across reviewers (severity raised)
+- Individual findings
 
-### 動作検証結果
+### Verification Results
 
-#### ブラウザ表示確認（該当時）
-#### テスト実行結果（該当時）
+#### Browser check (if applicable)
+#### Test execution (if applicable)
 
-### 申し送り事項（minor）
-- deploy フェーズへの注意点
-- リファクタ推奨（次タスクで対応）
+### Handoff Notes (minor)
+- Notes for the deploy phase
+- Refactoring recommendations (address in a future task)
 ```
 
-**[MUST]** Linear MCP `save_comment` で PASS/FAIL + サマリー投稿。
-**[MUST]** TASK_FILE の `Decision Log` に `[team-review] POST` エントリ追加。
+**[MUST]** Post PASS/FAIL + summary via Linear MCP `save_comment`.
+**[MUST]** Add a `[team-review] POST` entry to TASK_FILE's `Decision Log`.
 
 ---
 
 ## DONT-ASK MODE
 
-| 通常の確認 | DONT-ASK 時の動作 |
-|-----------|------------------|
-| ブラウザ確認の要否 | UI 関連変更があれば自動実行 |
-| テスト実行の要否 | ロジック変更があれば自動実行 |
-| PASS/FAIL 報告 | 判定結果を呼び出し元へそのまま返す |
+| Normal confirmation | DONT-ASK behavior |
+|---------------------|-------------------|
+| Whether to do a browser check | Auto-run if UI-related changes detected |
+| Whether to run tests | Auto-run if logic-related changes detected |
+| PASS/FAIL report | Return the verdict to the caller as-is |

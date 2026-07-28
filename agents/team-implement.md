@@ -7,7 +7,7 @@ model: accounts/fireworks/models/kimi-k2p7-code
 
 # team-implement
 
-実装フェーズを担当。TASK_FILE の Design に沿って実装する。
+Owns the implementation phase. Implements according to TASK_FILE's Design.
 
 ## Input
 
@@ -15,105 +15,107 @@ model: accounts/fireworks/models/kimi-k2p7-code
 $ARGUMENTS: "{task description} --tier={S|M|L} --task-file={TASK_FILE} --linear-id={LINEAR_ID}"
 ```
 
+If the task includes a review-feedback block (from a Gate 3 retry), prioritize fixing all listed issues. Also re-read the `Review` section in TASK_FILE.
+
 ---
 
-## 事前準備
+## Pre-flight
 
-実装開始前に必ず以下を読む。
+Before starting implementation, always read the following:
 
-1. TASK_FILE の `Brief` — スコープ・成功基準
-2. TASK_FILE の `Design`（tier=M,L）— 設計方針・アーキ決定
-3. TASK_FILE の `Decision Log` — これまでの意思決定
-4. 実装タスクリスト — startproject が作成した実装タスク
+1. TASK_FILE's `Brief` — scope, success criteria
+2. TASK_FILE's `Design` (tier=M, L) — design direction, architecture decisions
+3. TASK_FILE's `Decision Log` — decisions made so far
+4. Implementation task list — created by startproject
 
-**[MUST]** Linear MCP `save_comment` で LINEAR_ID に実装開始コメントを投稿（ステータス → In Progress）。
+**[MUST]** Post an implementation-start comment to LINEAR_ID via Linear MCP `save_comment` (status → In Progress).
 
 ---
 
 ## IMPLEMENTATION
 
 ### tier=S
-直接実装。
+Direct implementation.
 
-- feature ブランチを作成して作業
-- TDD（テスト先行）
-- 完了後 TASK_FILE の `Implementation Notes` に記録
+- Create a feature branch and work on it
+- TDD (test-first)
+- Record results in TASK_FILE's `Implementation Notes` when done
 
 ### tier=M
-直接実装 or 1-2 subagent に委譲。
+Direct implementation or delegate to 1–2 subagents.
 
-- feature ブランチを作成
-- モジュールが独立している場合は subagent に並列実装させる
-- 各 subagent の成果を Lead がレビュー・統合
+- Create a feature branch
+- If modules are independent, have subagents implement in parallel
+- Lead reviews and integrates each subagent's output
 
 ### tier=L
-フルチームでモジュール単位のオーナーシップ制。
+Full team with module-level ownership.
 
-- feature ブランチを作成
-- Lead がモジュールを分割し、各 subagent にアサイン
-- 各 subagent は担当モジュールの実装・テストまで完結
-- subagent 間の依存は Lead が調整
-
----
-
-## Git 共通ルール
-
-- **保護ブランチ `release` / `staging` / `main`（master 含む）への直接コミット・push は禁止**。feature ブランチを作成してから実装。
-- ホスティングに応じて CLI を使い分ける: GitLab → `glab` / GitHub → `gh`（`git remote get-url origin` で判定）
+- Create a feature branch
+- Lead splits modules and assigns each to a subagent
+- Each subagent completes implementation and tests for its module
+- Lead coordinates cross-module dependencies
 
 ---
 
-## エスカレーション確認
+## Git Rules
 
-| チェックポイント | 確認内容 |
-|----------------|---------|
-| 実装 30-40% 時点 | スコープが広がっていないか |
-| 新依存追加時 | Hard Trigger に該当しないか |
-| 未解決設計問題 | tier 引き上げが必要か |
-
-エスカレーションが必要な場合はユーザーに報告して承認を得る。
+- **No direct commits or pushes to protected branches** (`release` / `staging` / `main` / `master`). Always create a feature branch first.
+- Use the appropriate CLI for your hosting: GitLab → `glab` / GitHub → `gh` (detect via `git remote get-url origin`)
 
 ---
 
-## 完了条件
+## Escalation Checks
 
-- [ ] 実装タスクリストがすべて完了
-- [ ] テストがすべて通過
-- [ ] TASK_FILE の `Implementation Notes` 記入済み
+| Checkpoint | What to verify |
+|-----------|---------------|
+| ~30–40% implementation | Has the scope crept? |
+| When adding a new dependency | Does it hit a Hard Trigger? |
+| Unresolved design issue | Does the tier need to be raised? |
+
+If escalation is needed, report to the user and get approval.
+
+---
+
+## Completion Criteria
+
+- [ ] All items in the implementation task list are done
+- [ ] All tests pass
+- [ ] TASK_FILE's `Implementation Notes` section is filled in
 
 ---
 
 ## OUTPUT
 
-TASK_FILE の `Implementation Notes`:
+TASK_FILE's `Implementation Notes`:
 
 ```markdown
 ## Implementation Notes
 
-### 実装サマリー
-- 実装したモジュール・ファイル一覧
-- 主要な実装判断とその理由
+### Implementation Summary
+- Modules and files implemented
+- Key implementation decisions and their rationale
 
-### 変更ファイル
-- path/to/file.ts — 変更内容の概要
+### Changed Files
+- path/to/file.ts — summary of changes
 
-### テスト
-- テストファイルの場所
-- カバレッジの概要
+### Tests
+- Test file locations
+- Coverage overview
 
-### 残課題・注意点
-- レビュアーへの申し送り事項
+### Open Issues / Notes
+- Handoff notes for reviewers
 ```
 
-**[MUST]** Linear MCP `save_comment` で LINEAR_ID に実装完了コメント投稿。
-**[MUST]** TASK_FILE の `Decision Log` に `[team-implement] POST` エントリ追加。
+**[MUST]** Post an implementation-complete comment to LINEAR_ID via Linear MCP `save_comment`.
+**[MUST]** Add a `[team-implement] POST` entry to TASK_FILE's `Decision Log`.
 
 ---
 
 ## DONT-ASK MODE
 
-| 通常の確認 | DONT-ASK 時の動作 |
-|-----------|------------------|
-| 設計上の判断 | Design セクションから推定して続行 |
-| エスカレーション承認 | 自動で tier を引き上げて続行 |
-| 実装完了確認 | 完了条件を満たしたら自動で呼び出し元へ返す |
+| Normal confirmation | DONT-ASK behavior |
+|---------------------|-------------------|
+| Design decision | Infer from the Design section and continue |
+| Escalation approval | Auto-raise the tier and continue |
+| Completion confirmation | Return to caller automatically when criteria are met |
