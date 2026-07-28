@@ -33,9 +33,9 @@ Each phase runs as an **isolated pi subprocess** with its own context window, mo
 
 ### Editable behavior (the markdown layer)
 
-- `agents/*.md` — phase procedures (frontmatter: `name`, `description`, `tools`, `model`)
+- `agents/*.md` — phase procedures (frontmatter: `name`, `description`, `tools`) — **no model field**, models are configured centrally in `orchestrator.json`
 - `prompts/orchestrate.md` — entry-point prompt template
-- `orchestrator.json` — tier→model mapping, budget, gates, hard triggers
+- `orchestrator.json` — tier→model mapping, budget, gates, hard triggers — **the single source of truth for model routing**
 
 No code changes needed to adjust models, procedures, or review criteria — edit the markdown/json and run `/reload`.
 
@@ -68,7 +68,7 @@ Start (or restart) pi and run `/reload` to pick up the extension. You should see
 
 ## Configure
 
-Edit `orchestrator.json` to match your available models and preferences:
+**Models are set only in `orchestrator.json`** — agent `.md` files are model-agnostic. Run `pi --list-models` to see your available models, then edit `orchestrator.json`:
 
 ```jsonc
 {
@@ -127,13 +127,13 @@ pi-orchestrator/
 │   ├── runner.ts    # pi subprocess spawn, JSON parsing, 429 fallback
 │   └── agents.ts    # agent discovery (self-contained)
 ├── agents/
-│   ├── startproject.md
+│   ├── startproject.md        # phase procedures (no model field)
 │   ├── team-implement.md
 │   ├── team-review.md
 │   └── deploy.md
 ├── prompts/
 │   └── orchestrate.md
-├── orchestrator.json           # tier→model mapping, budget, gates
+├── orchestrator.json           # tier→model mapping, budget, gates (single source of truth)
 └── orchestrator.schema.json
 ```
 

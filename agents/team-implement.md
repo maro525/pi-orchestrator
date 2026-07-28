@@ -2,7 +2,6 @@
 name: team-implement
 description: Implementation phase — reads design, implements code, writes to TASK_FILE.
 tools: read, edit, write, bash, grep, find, ls
-model: accounts/fireworks/models/kimi-k2p7-code
 ---
 
 # team-implement

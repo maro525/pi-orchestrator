@@ -2,7 +2,6 @@
 name: deploy
 description: Deploy subagent — push feature branch, create PR via gh CLI, update tracker. Also handles ad-hoc git operations.
 tools: read, bash, edit, write
-model: accounts/fireworks/models/glm-5p2-fast
 ---
 
 # deploy

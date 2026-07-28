@@ -2,7 +2,6 @@
 name: team-review
 description: Review phase — parallel reviewers (Quality / Logic / Security / Simplify), browser/test verification. Outputs PASS / FAIL to TASK_FILE.
 tools: read, bash, grep, find, ls
-model: accounts/fireworks/models/glm-5p2
 ---
 
 # team-review

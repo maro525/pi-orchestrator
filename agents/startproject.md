@@ -2,7 +2,6 @@
 name: startproject
 description: Plan phase — understand codebase, research/design, create plan. Writes Brief / Design / Decision Log to TASK_FILE.
 tools: read, grep, find, ls, bash
-model: accounts/fireworks/models/kimi-k2p7-code
 ---
 
 # startproject
