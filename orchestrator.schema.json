@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Orchestrator Config",
+  "type": "object",
+  "properties": {
+    "tiers": {
+      "type": "object",
+      "description": "Per-tier model assignment for each phase. null = skip phase.",
+      "properties": {
+        "XS": { "$ref": "#/definitions/tierModels" },
+        "S": { "$ref": "#/definitions/tierModels" },
+        "M": { "$ref": "#/definitions/tierModels" },
+        "L": { "$ref": "#/definitions/tierModels" }
+      },
+      "additionalProperties": { "$ref": "#/definitions/tierModels" }
+    },
+    "thinkingLevel": {
+      "type": "object",
+      "description": "Per-phase thinking level (off|minimal|low|medium|high|xhigh|max).",
+      "properties": {
+        "startproject": { "type": "string" },
+        "team-implement": { "type": "string" },
+        "team-review": { "type": "string" },
+        "deploy": { "type": "string" }
+      }
+    },
+    "fallbackModel": { "type": "string", "description": "Model to switch to on 429/repeated errors." },
+    "fallbackThinkingLevel": { "type": "string" },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "maxCostPerPhase": { "type": "number" },
+        "maxTotalCost": { "type": "number" },
+        "warnCostPerPhase": { "type": "number" }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "properties": {
+        "gate1": { "type": "boolean", "description": "Plan approval gate after startproject." },
+        "gate3": { "type": "boolean", "description": "Review FAIL gate — ask user." },
+        "dontAsk": { "type": "boolean", "description": "Auto-approve all gates." },
+        "maxRetries": { "type": "integer", "description": "Auto-retry on review FAIL before giving up." }
+      }
+    },
+    "hardTriggers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Keywords that force tier=L regardless of file/complexity estimate."
+    },
+    "taskFileDir": { "type": "string", "description": "Directory for task files (relative to cwd)." },
+    "linear": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "idPattern": { "type": "string", "description": "Regex to detect Linear IDs in arguments." }
+      }
+    }
+  },
+  "definitions": {
+    "tierModels": {
+      "type": "object",
+      "properties": {
+        "startproject": { "type": ["string", "null"] },
+        "team-implement": { "type": ["string", "null"] },
+        "team-review": { "type": ["string", "null"] },
+        "deploy": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
