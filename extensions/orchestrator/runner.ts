@@ -282,8 +282,10 @@ export async function runPhase(opts: RunPhaseOptions): Promise<PhaseResult> {
 	// First attempt with configured model
 	let result = await spawnPhase(opts.phase, agent, opts.phaseModel, opts.task, opts.cwd, opts.signal, opts.onUpdate);
 
-	// Fallback on 429 or hard error
-	if (isRateLimited(result) || isHardError(result)) {
+	// Fallback on 429 or hard error — only if a fallback model is actually
+	// configured. A blank fallbackModel would spawn with `--model :medium`
+	// and fail again, so skip the second attempt and surface the original error.
+	if ((isRateLimited(result) || isHardError(result)) && opts.fallbackModel && opts.fallbackModel.trim()) {
 		const fallbackPhaseModel: PhaseModel = {
 			model: opts.fallbackModel,
 			thinkingLevel: opts.fallbackThinking,

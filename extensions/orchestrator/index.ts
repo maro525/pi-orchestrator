@@ -26,6 +26,7 @@ import {
 	type Tier,
 	classifyTier,
 	detectLinearId,
+	getConfigPath,
 	loadConfig,
 	parseOrchestrateArgs,
 	phasesForTier,
@@ -292,6 +293,25 @@ async function orchestrate(
 
 	// Setup
 	const phases = phasesForTier(tier);
+
+	// PREFLIGHT: a blanked/misconfigured orchestrator.json would have every
+	// phase mark itself `skipped` and we'd ghost-complete with an empty summary
+	// and $0 — the exact silent-no-op failure we must surface loudly.
+	const runnablePhases = phases.filter((p) => {
+		const m = config.tiers[tier][p];
+		return typeof m === "string" && m.trim().length > 0;
+	});
+	if (runnablePhases.length === 0) {
+		const cfgPath = getConfigPath();
+		const msg =
+			`orchestrate: no usable models configured for tier=${tier}.\n` +
+			`All phase models are null/blank in orchestrator.json, so every phase would be skipped and nothing would run.\n` +
+			`Model config: ${cfgPath}\n` +
+			`Fix: set valid model IDs (from \`pi --list-models\`) for tiers.${tier}.* and fallbackModel.`;
+		ctx.ui.notify(msg, "error");
+		throw new Error(msg);
+	}
+
 	const budget = new BudgetTracker(config);
 	const results: PhaseResult[] = [];
 	const taskArgs = `${parsed.taskDescription} --tier=${tier} --task-file=${taskFile} --linear-id=${linearId ?? "none"}`;
@@ -303,7 +323,12 @@ async function orchestrate(
 	for (const phase of phases) {
 		const phaseModel = resolvePhaseModel(config, tier, phase);
 		if (phaseModel.skipped) {
-			ctx.ui.notify(`${phase}: skipped (tier=${tier})`, "info");
+			const intentional = config.tiers[tier][phase] === null;
+			if (intentional) {
+				ctx.ui.notify(`${phase}: skipped (model=null, tier=${tier})`, "info");
+			} else {
+				ctx.ui.notify(`${phase}: skipped — model is blank in orchestrator.json (tiers.${tier}.${phase})`, "warn");
+			}
 			continue;
 		}
 

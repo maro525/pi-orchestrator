@@ -3,27 +3,27 @@
   "tiers": {
     "XS": {
       "startproject": null,
-      "team-implement": "accounts/fireworks/models/glm-5p2",
+      "team-implement": "opencode-go/glm-5.2",
       "team-review": null,
-      "deploy": "accounts/fireworks/models/glm-5p2-fast"
+      "deploy": "opencode-go/glm-5.2"
     },
     "S": {
-      "startproject": "accounts/fireworks/models/glm-5p2-fast",
-      "team-implement": "accounts/fireworks/models/glm-5p2",
-      "team-review": "accounts/fireworks/models/glm-5p2-fast",
-      "deploy": "accounts/fireworks/models/glm-5p2-fast"
+      "startproject": "opencode-go/glm-5.2",
+      "team-implement": "opencode-go/kimi-k3",
+      "team-review": "opencode-go/glm-5.2",
+      "deploy": "opencode-go/glm-5.2"
     },
     "M": {
-      "startproject": "accounts/fireworks/models/kimi-k2p7-code",
-      "team-implement": "accounts/fireworks/models/kimi-k2p7-code",
-      "team-review": "accounts/fireworks/models/glm-5p2",
-      "deploy": "accounts/fireworks/models/glm-5p2-fast"
+      "startproject": "opencode-go/kimi-k3",
+      "team-implement": "opencode-go/kimi-k3",
+      "team-review": "opencode-go/glm-5.2",
+      "deploy": "opencode-go/glm-5.2"
     },
     "L": {
-      "startproject": "accounts/fireworks/models/kimi-k2p7-code",
-      "team-implement": "accounts/fireworks/models/kimi-k2p7-code",
-      "team-review": "accounts/fireworks/models/kimi-k2p7-code",
-      "deploy": "accounts/fireworks/models/glm-5p2"
+      "startproject": "opencode-go/kimi-k3",
+      "team-implement": "opencode-go/kimi-k3",
+      "team-review": "opencode-go/kimi-k3",
+      "deploy": "opencode-go/kimi-k3"
     }
   },
   "thinkingLevel": {
@@ -32,7 +32,7 @@
     "team-review": "high",
     "deploy": "low"
   },
-  "fallbackModel": "accounts/fireworks/models/glm-5p2-fast",
+  "fallbackModel": "opencode-go/glm-5.2",
   "fallbackThinkingLevel": "medium",
   "budget": {
     "maxCostPerPhase": 0.8,

@@ -51,13 +51,13 @@ export interface OrchestratorConfig {
 
 const DEFAULT_CONFIG: OrchestratorConfig = {
 	tiers: {
-		XS: { startproject: null, "team-implement": "accounts/fireworks/models/glm-5p2", "team-review": null, deploy: "accounts/fireworks/models/glm-5p2-fast" },
-		S: { startproject: "accounts/fireworks/models/glm-5p2-fast", "team-implement": "accounts/fireworks/models/glm-5p2", "team-review": "accounts/fireworks/models/glm-5p2-fast", deploy: "accounts/fireworks/models/glm-5p2-fast" },
-		M: { startproject: "accounts/fireworks/models/kimi-k2p7-code", "team-implement": "accounts/fireworks/models/kimi-k2p7-code", "team-review": "accounts/fireworks/models/glm-5p2", deploy: "accounts/fireworks/models/glm-5p2-fast" },
-		L: { startproject: "accounts/fireworks/models/kimi-k2p7-code", "team-implement": "accounts/fireworks/models/kimi-k2p7-code", "team-review": "accounts/fireworks/models/kimi-k2p7-code", deploy: "accounts/fireworks/models/glm-5p2" },
+		XS: { startproject: null, "team-implement": "", "team-review": null, deploy: "" },
+		S: { startproject: "", "team-implement": "", "team-review": "", deploy: "" },
+		M: { startproject: "", "team-implement": "", "team-review": "", deploy: "" },
+		L: { startproject: "", "team-implement": "", "team-review": "", deploy: "" },
 	},
 	thinkingLevel: { startproject: "high", "team-implement": "medium", "team-review": "high", deploy: "low" },
-	fallbackModel: "accounts/fireworks/models/glm-5p2-fast",
+	fallbackModel: "",
 	fallbackThinkingLevel: "medium",
 	budget: { maxCostPerPhase: 0.8, maxTotalCost: 3.0, warnCostPerPhase: 0.4 },
 	gates: { gate1: true, gate3: true, dontAsk: false, maxRetries: 1 },
@@ -66,8 +66,12 @@ const DEFAULT_CONFIG: OrchestratorConfig = {
 	linear: { enabled: true, idPattern: "[A-Z]+-[0-9]+" },
 };
 
+export function getConfigPath(): string {
+	return path.join(getAgentDir(), "orchestrator.json");
+}
+
 export function loadConfig(): OrchestratorConfig {
-	const configPath = path.join(getAgentDir(), "orchestrator.json");
+	const configPath = getConfigPath();
 	try {
 		const raw = fs.readFileSync(configPath, "utf-8");
 		const parsed = JSON.parse(raw);
