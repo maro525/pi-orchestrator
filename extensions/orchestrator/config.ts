@@ -59,7 +59,7 @@ const DEFAULT_CONFIG: OrchestratorConfig = {
 	thinkingLevel: { startproject: "high", "team-implement": "medium", "team-review": "high", deploy: "low" },
 	fallbackModel: "",
 	fallbackThinkingLevel: "medium",
-	budget: { maxCostPerPhase: 0.8, maxTotalCost: 3.0, warnCostPerPhase: 0.4 },
+	budget: { maxCostPerPhase: 1000, maxTotalCost: 10000, warnCostPerPhase: 500 },
 	gates: { gate1: true, gate3: true, dontAsk: false, maxRetries: 1 },
 	hardTriggers: ["auth", "authentication", "db migration", "database migration", "payment", "billing", "public api", "core dependency", "schema change"],
 	taskFileDir: ".claude/docs/decisions",

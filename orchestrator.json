@@ -35,9 +35,9 @@
   "fallbackModel": "opencode-go/glm-5.2",
   "fallbackThinkingLevel": "medium",
   "budget": {
-    "maxCostPerPhase": 0.8,
-    "maxTotalCost": 3.0,
-    "warnCostPerPhase": 0.4
+    "maxCostPerPhase": 1000.0,
+    "maxTotalCost": 10000.0,
+    "warnCostPerPhase": 500.0
   },
   "gates": {
     "gate1": true,

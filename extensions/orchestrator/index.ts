@@ -318,6 +318,7 @@ async function orchestrate(
 
 	let implementResult: PhaseResult | null = null;
 	let reviewResult: PhaseResult | null = null;
+	let totalOverConfirmed = false; // user confirmed total-budget overrun once → don't re-prompt every phase
 
 	// Execute phases sequentially
 	for (const phase of phases) {
@@ -359,10 +360,11 @@ async function orchestrate(
 		if (pc.over) ctx.ui.notify(`⚠ Budget: ${pc.msg}`, "warn");
 		else if (pc.warn) ctx.ui.notify(`Budget: ${pc.msg}`, "info");
 		const tc = budget.checkTotal();
-		if (tc.over) {
+		if (tc.over && !totalOverConfirmed) {
 			ctx.ui.notify(`⚠ TOTAL BUDGET EXCEEDED: ${tc.msg}`, "error");
 			const stop = await ctx.ui.confirm("予算超過", "続行しますか？");
 			if (!stop) break;
+			totalOverConfirmed = true;
 		}
 
 		// Gate 1: after startproject
