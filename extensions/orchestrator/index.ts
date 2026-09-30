@@ -1,24 +1,19 @@
 /**
- * Orchestrator Extension — Path C hybrid
+ * Orchestrator extension.
  *
- * Code (this file + config.ts + runner.ts):
- *   - tier classification & model routing (dynamic, config-driven)
- *   - Gate 1 / Gate 3 confirm dialogs via ctx.ui
- *   - isolated pi subprocess per phase (runner.ts)
- *   - 429 fallback, budget tracking, state persistence
+ * Code owns routing, gates, budget, fallback, and TASK_FILE writes.
+ * Phase agents return an OUTPUT payload. They do not write TASK_FILE or post to Linear.
+ * pi has no Linear MCP: a missing post is reported, never skipped silently.
  *
- * Markdown (editable, no code changes needed):
- *   - ~/.pi/agent/agents/{startproject,team-implement,team-review,deploy}.md
- *   - ~/.pi/agent/prompts/orchestrate.md  (entry point)
- *   - ~/.pi/agent/orchestrator.json        (tier→model mapping, budget, gates)
+ * Markdown:
+ *   ~/.pi/agent/agents/{startproject,team-implement,team-review,deploy}.md
+ *   ~/.pi/agent/prompts/orchestrate.md
+ *   ~/.pi/agent/orchestrator.json
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	CONFIG_DIR_NAME,
-	type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
 	type OrchestratorConfig,
@@ -29,14 +24,9 @@ import {
 	getConfigPath,
 	loadConfig,
 	parseOrchestrateArgs,
-	phasesForTier,
 	resolvePhaseModel,
 } from "./config.ts";
 import { runPhase, type PhaseResult } from "./runner.ts";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function fmtCost(n: number): string {
 	return `$${n.toFixed(4)}`;
@@ -49,94 +39,159 @@ function fmtTokens(n: number): string {
 }
 
 function summarizeResult(r: PhaseResult): string {
-	const status = r.exitCode === 0 ? "✓" : "✗";
+	const status = r.exitCode === 0 ? "ok" : "fail";
 	const parts = [
 		`${status} ${r.phase}`,
 		r.fallbackUsed ? "(fallback)" : "",
 		`${r.usage.turns} turns`,
-		`↑${fmtTokens(r.usage.input)}`,
-		`↓${fmtTokens(r.usage.output)}`,
+		`in ${fmtTokens(r.usage.input)}`,
+		`out ${fmtTokens(r.usage.output)}`,
 		fmtCost(r.usage.cost),
 		r.model,
 	].filter(Boolean);
 	return parts.join(" | ");
 }
 
-// ---------------------------------------------------------------------------
-// Task file management
-// ---------------------------------------------------------------------------
+function tierRank(t: Tier): number {
+	return { XS: 0, S: 1, M: 2, L: 3 }[t];
+}
 
-function ensureTaskFile(cwd: string, config: OrchestratorConfig, linearId: string | null, feature: string): string {
-	const dir = path.join(cwd, config.taskFileDir);
-	fs.mkdirSync(dir, { recursive: true });
-	const safeFeature = feature.replace(/[^\w.-]+/g, "_").slice(0, 40);
-	const id = linearId ?? `LOCAL-${Date.now().toString(36)}`;
-	const file = path.join(dir, `task-${id}-${safeFeature}.md`);
+function featureSlug(taskDescription: string): string {
+	const words = taskDescription
+		.replace(/[A-Z]+-\d+/g, "")
+		.replace(/[^\p{L}\p{N}\s_-]+/gu, " ")
+		.trim()
+		.split(/\s+/)
+		.filter((w) => w.length > 1)
+		.slice(0, 4)
+		.join("_");
+	const safe = words.replace(/[^\p{L}\p{N}_.-]+/gu, "_").replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 40);
+	return safe || "task";
+}
 
-	if (!fs.existsSync(file)) {
-		const template = `# Task: ${id} — ${feature}
+function taskTemplate(id: string, title: string, linearId: string | null, tier: Tier): string {
+	return `# Task: ${id} — ${title}
 
 ## Meta
 - linear_id: ${linearId ?? "(none)"}
-- tier: (pending)
+- tier: ${tier}
 - created: ${new Date().toISOString()}
 - status: planning
+- branch:
+- base:
 
-## Brief
-<!-- startproject が記入 -->
+## startproject
+### Brief
+<!-- orchestrator が startproject の返却 BRIEF から記入 -->
 
-## Decision Log
-<!-- 各フェーズが追記 -->
+### Design
+<!-- orchestrator が startproject の返却 DESIGN から記入 -->
 
-## Design
-<!-- startproject (tier=M,L) が記入 -->
+### Plan
+<!-- orchestrator が startproject の返却 PLAN から記入 -->
 
-## Implementation Notes
-<!-- team-implement が記入 -->
+## team-implement
+<!-- orchestrator が team-implement の返却 IMPLEMENTATION_NOTES から記入 -->
 
-## Review
-<!-- team-review が記入 -->
+## team-review
+<!-- orchestrator が team-review の返却 REVIEW から記入 -->
 
-## Deploy
-<!-- deploy が記入 -->
+## deploy
+<!-- orchestrator が deploy の返却 DEPLOY から記入 -->
 `;
-		fs.writeFileSync(file, template, "utf-8");
+}
+
+function ensureTaskFile(cwd: string, config: OrchestratorConfig, linearId: string | null, feature: string, title: string, tier: Tier): string {
+	const dir = path.join(cwd, config.taskFileDir);
+	fs.mkdirSync(dir, { recursive: true });
+	const id = linearId ?? `LOCAL-${Date.now().toString(36)}`;
+	const file = path.join(dir, `task-${id}-${feature}.md`);
+	if (!fs.existsSync(file)) {
+		fs.writeFileSync(file, taskTemplate(id, title, linearId, tier), "utf-8");
 	}
 	return file;
 }
 
-function featureSlug(taskDescription: string): string {
-	// Take first few meaningful words
-	const words = taskDescription
-		.replace(/[A-Z]+-\d+/g, "")
-		.replace(/[^\w\s]/g, "")
-		.trim()
-		.split(/\s+/)
-		.filter((w) => w.length > 2)
-		.slice(0, 4)
-		.join("_");
-	return words || "task";
+function escapeRe(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function updateTaskFile(file: string, updates: Record<string, string>): void {
-	let content = "";
-	try {
-		content = fs.readFileSync(file, "utf-8");
-	} catch {
-		return;
-	}
-	for (const [section, body] of Object.entries(updates)) {
-		const re = new RegExp(`(## ${section}\\n)([\\s\\S]*?)(\\n## |$)`);
-		if (re.test(content)) {
-			content = content.replace(re, `$1${body}$3`);
+function mapH2(content: string, h2: string, fn: (body: string) => string): string {
+	const re = new RegExp(`(## ${escapeRe(h2)}\\n)([\\s\\S]*?)(\\n## |$)`);
+	const m = content.match(re);
+	if (!m) return content;
+	let next = fn(m[2]);
+	if (!next.endsWith("\n")) next += "\n";
+	return content.replace(re, (_all, open, _body, close) => `${open}${next}${close}`);
+}
+
+function setMetaFields(content: string, fields: Record<string, string>): string {
+	return mapH2(content, "Meta", (body) => {
+		let next = body;
+		for (const [key, value] of Object.entries(fields)) {
+			const line = `- ${key}: ${value}`;
+			const re = new RegExp(`^- ${escapeRe(key)}:.*$`, "m");
+			if (re.test(next)) next = next.replace(re, () => line);
+			else next = `${line}\n${next}`;
 		}
-	}
-	fs.writeFileSync(file, content, "utf-8");
+		return next;
+	});
 }
 
-// ---------------------------------------------------------------------------
-// Budget tracker
-// ---------------------------------------------------------------------------
+function setH3(content: string, h2: string, h3: string, body: string): string {
+	const block = `${body.trim()}\n`;
+	return mapH2(content, h2, (section) => {
+		const h3re = new RegExp(`(### ${escapeRe(h3)}\\n)[\\s\\S]*?(?=\\n### |$)`);
+		if (h3re.test(section)) return section.replace(h3re, (_all, open) => `${open}${block}`);
+		return `${section.replace(/\s*$/, "")}\n\n### ${h3}\n${block}`;
+	});
+}
+
+function setH2Body(content: string, h2: string, body: string): string {
+	return mapH2(content, h2, () => `${body.trim()}\n`);
+}
+
+function appendRound(content: string, h2: string, body: string): string {
+	return mapH2(content, h2, (section) => {
+		const n = (section.match(/^### \d+回目/gm) ?? []).length + 1;
+		return `${section.replace(/\s*$/, "")}\n\n### ${n}回目\n${body.trim()}\n`;
+	});
+}
+
+function setLinearComment(content: string, h2: string, comment: string): string {
+	const block = `<!-- linear-comment\n${comment.trim()}\n-->\n`;
+	return mapH2(content, h2, (body) => {
+		const stripped = body.replace(/<!-- linear-comment\n[\s\S]*?-->\n?/, "");
+		return block + stripped.replace(/^\n/, "");
+	});
+}
+
+function readTask(file: string): string | null {
+	try {
+		return fs.readFileSync(file, "utf-8");
+	} catch {
+		return null;
+	}
+}
+
+function writeTask(ctx: any, file: string, content: string): boolean {
+	try {
+		fs.writeFileSync(file, content, "utf-8");
+		return true;
+	} catch (e: any) {
+		ctx.ui.notify(`TASK_FILE の書き込みに失敗しました: ${file} (${e?.message ?? e})`, "error");
+		return false;
+	}
+}
+
+function mutateTask(ctx: any, file: string, fn: (content: string) => string): boolean {
+	const cur = readTask(file);
+	if (cur == null) {
+		ctx.ui.notify(`TASK_FILE を読めません: ${file}`, "error");
+		return false;
+	}
+	return writeTask(ctx, file, fn(cur));
+}
 
 class BudgetTracker {
 	totalCost = 0;
@@ -166,75 +221,72 @@ class BudgetTracker {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Gate helpers
-// ---------------------------------------------------------------------------
-
-interface GateResult {
-	approved: boolean;
-	action: "continue" | "retry" | "abort";
-}
-
-async function gate1(ctx: any, config: OrchestratorConfig, planSummary: string): Promise<GateResult> {
-	if (!config.gates.gate1 || config.gates.dontAsk) return { approved: true, action: "continue" };
-	const ok = await ctx.ui.confirm(
-		"Gate 1: 計画を承認しますか？",
-		`startproject の計画:\n\n${planSummary}\n\n承認 → team-implement へ / 差し戻し → 計画修正`,
-	);
-	return ok ? { approved: true, action: "continue" } : { approved: false, action: "abort" };
-}
-
-async function gate3(ctx: any, config: OrchestratorConfig, reviewResult: PhaseResult, retryCount: number): Promise<GateResult> {
-	if (!config.gates.gate3) return { approved: true, action: "continue" };
-	if (config.gates.dontAsk && retryCount < config.gates.maxRetries) {
-		return { approved: false, action: "retry" };
+function parseSections(text: string): Record<string, string> {
+	let src = text.trim();
+	const fence = src.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/);
+	if (fence) src = fence[1];
+	const re = /^### ([A-Z][A-Z0-9_]*)\s*$/gm;
+	const matches = [...src.matchAll(re)];
+	const out: Record<string, string> = {};
+	for (let i = 0; i < matches.length; i++) {
+		const name = matches[i][1];
+		const start = (matches[i].index ?? 0) + matches[i][0].length;
+		const end = i + 1 < matches.length ? (matches[i + 1].index ?? src.length) : src.length;
+		out[name] = src.slice(start, end).trim();
 	}
-	if (config.gates.dontAsk) {
-		return { approved: true, action: "continue" };
-	}
-	const choice = await ctx.ui.select(
-		"Gate 3: team-review が FAIL になりました",
-		[
-			"retry: team-implement に戻って修正して再実装",
-			"continue: 指摘を無視して deploy へ進む",
-			"abort: 終了",
-		],
-	);
-	if (choice?.startsWith("retry")) return { approved: false, action: "retry" };
-	if (choice?.startsWith("continue")) return { approved: true, action: "continue" };
-	return { approved: false, action: "abort" };
+	return out;
 }
 
-// ---------------------------------------------------------------------------
-// Review PASS/FAIL detection from phase result text
-// ---------------------------------------------------------------------------
-
-function reviewVerdict(result: PhaseResult): "PASS" | "FAIL" | "UNKNOWN" {
-	const text = result.finalText + result.stderr;
-	if (/判定:\s*PASS|### 判定:\s*PASS/i.test(text)) return "PASS";
-	if (/判定:\s*FAIL|### 判定:\s*FAIL/i.test(text)) return "FAIL";
-	return "UNKNOWN";
+function hasSections(sections: Record<string, string>, required: string[]): boolean {
+	return required.every((name) => (sections[name] ?? "").trim().length > 0);
 }
 
-/**
- * レビュー指摘を実装タスクに埋め込んで、フィードバック付き再実装用のタスク文字列を構築する。
- * review の最終出力（指摘リスト）を抽出し、implement がそれを読んで修正できるようにする。
- */
-function buildRetryTask(originalTask: string, reviewResult: PhaseResult, retryCount: number): string {
-	const feedback = (reviewResult.finalText || reviewResult.stderr || "(レビュー出力なし)").slice(0, 6000);
+function gate1Token(raw: string | undefined): "auto-approved" | "approved" | "revised" | "needs-approval" {
+	const v = (raw ?? "").trim().toLowerCase();
+	const first = v.split(/[\s|]+/).filter(Boolean)[0] ?? "";
+	if (!v || (v.includes("auto") && v.includes("need"))) return "needs-approval";
+	if (first === "auto-approved" || first === "auto") return "auto-approved";
+	if (first === "approved") return "approved";
+	if (first === "revised") return "revised";
+	return "needs-approval";
+}
+
+function verdictOf(sections: Record<string, string>): "PASS" | "FAIL" | "UNKNOWN" {
+	const raw = (sections.VERDICT ?? "").trim().toUpperCase();
+	const hasPass = /\bPASS\b/.test(raw);
+	const hasFail = /\bFAIL\b/.test(raw);
+	if (hasPass === hasFail) return "UNKNOWN";
+	return hasPass ? "PASS" : "FAIL";
+}
+
+function parseEscalation(raw: string | undefined): { tier: Tier; reason: string } | null {
+	if (!raw?.trim()) return null;
+	const m = raw.match(/(?:^|\n)(S|M|L)\s*[:：]\s*([^\n]+)/);
+	if (!m) return null;
+	return { tier: m[1] as Tier, reason: m[2].trim() };
+}
+
+function firstLine(raw: string | undefined): string {
+	return (raw ?? "").split("\n")[0]?.trim() ?? "";
+}
+
+function planSummary(sections: Record<string, string>, fallback: string): string {
+	const design = sections.DESIGN?.trim();
+	const plan = sections.PLAN?.trim();
+	const text = [design && `方針:\n${design}`, plan && `計画:\n${plan}`].filter(Boolean).join("\n\n");
+	return (text || fallback || "(計画本文なし)").slice(0, 2500);
+}
+
+function buildRetryTask(originalTask: string, reviewText: string, retryCount: number): string {
+	const feedback = (reviewText || "(レビュー出力なし)").slice(0, 6000);
 	return `${originalTask}
 
 ---
-## 前回の team-review での指摘（retry #${retryCount}）
-以下の指摘をすべて修正してください。TASK_FILE の Review セクションも参照すること。
+前回の team-review（retry #${retryCount}）の指摘です。critical / major をすべて修正してください。TASK_FILE の ## team-review 最新回も参照すること。コミットはしないこと。
 
 ${feedback}
 ---`;
 }
-
-// ---------------------------------------------------------------------------
-// Main orchestration flow
-// ---------------------------------------------------------------------------
 
 interface OrchestrationState {
 	tier: Tier;
@@ -242,262 +294,541 @@ interface OrchestrationState {
 	taskFile: string;
 	results: PhaseResult[];
 	totalCost: number;
+	report: string;
 }
 
-async function orchestrate(
+interface RunCtx {
+	ctx: any;
+	cwd: string;
+	scope: "user" | "project" | "both";
+	config: OrchestratorConfig;
+	budget: BudgetTracker;
+	results: PhaseResult[];
+	linearNotes: string[];
+	totalOverConfirmed: boolean;
+}
+
+async function executePhase(
+	rc: RunCtx,
+	phase: Phase,
+	tier: Tier,
+	task: string,
+	required: string[],
+): Promise<{ result: PhaseResult; sections: Record<string, string>; ok: boolean; stopped: boolean }> {
+	const phaseModel = resolvePhaseModel(rc.config, tier, phase);
+	if (phaseModel.skipped) {
+		rc.ctx.ui.notify(`${phase}: model が null です (tier=${tier})。中断します。`, "error");
+		return { result: emptyResult(phase), sections: {}, ok: false, stopped: true };
+	}
+
+	const runOnce = async (prompt: string): Promise<PhaseResult> => {
+		rc.ctx.ui.setStatus("orchestrator", `${phase} running (${phaseModel.model})...`);
+		const result = await runPhase({
+			cwd: rc.cwd,
+			scope: rc.scope,
+			phase,
+			agentName: phase,
+			phaseModel,
+			fallbackModel: rc.config.fallbackModel,
+			fallbackThinking: rc.config.fallbackThinkingLevel,
+			task: prompt,
+			signal: rc.ctx.signal,
+			onUpdate: (text) => {
+				rc.ctx.ui.setStatus("orchestrator", `${phase}: ${text.slice(0, 80)}`);
+			},
+		});
+		rc.budget.add(phase, result.usage.cost);
+		rc.results.push(result);
+		rc.ctx.ui.notify(summarizeResult(result), result.exitCode === 0 ? "info" : "warn");
+		return result;
+	};
+
+	let result = await runOnce(task);
+	let sections = parseSections(result.finalText);
+	const escalating = phase === "team-implement" && parseEscalation(sections.ESCALATION);
+	if (result.exitCode === 0 && !escalating && !hasSections(sections, required)) {
+		rc.ctx.ui.notify(`${phase}: OUTPUT が不足しています。整形し直します。`, "warn");
+		const retryTask = `前回の応答が OUTPUT フォーマットに従っていません。必須セクション: ${required.join(", ")}。そのフォーマットだけを返してください。\n\n元タスク:\n${task.slice(0, 4000)}\n\n前回の応答:\n${result.finalText.slice(0, 8000)}`;
+		result = await runOnce(retryTask);
+		sections = parseSections(result.finalText);
+	}
+
+	const pc = rc.budget.checkPhase(phase);
+	if (pc.over) rc.ctx.ui.notify(`Budget: ${pc.msg}`, "warn");
+	else if (pc.warn) rc.ctx.ui.notify(`Budget: ${pc.msg}`, "info");
+	const tc = rc.budget.checkTotal();
+	if (tc.over && !rc.totalOverConfirmed) {
+		rc.ctx.ui.notify(`TOTAL BUDGET EXCEEDED: ${tc.msg}`, "error");
+		const cont = await rc.ctx.ui.confirm("予算超過", "続行しますか？");
+		if (!cont) return { result, sections, ok: false, stopped: true };
+		rc.totalOverConfirmed = true;
+	}
+
+	rc.ctx.ui.setStatus("orchestrator", "");
+	if (result.exitCode !== 0) {
+		rc.ctx.ui.notify(`${phase} が失敗しました。次のフェーズには進みません。`, "error");
+		return { result, sections, ok: false, stopped: true };
+	}
+	if (!escalating && !hasSections(sections, required)) {
+		rc.ctx.ui.notify(`${phase}: 必須セクションがありません (${required.join(", ")})。中断します。`, "error");
+		return { result, sections, ok: false, stopped: true };
+	}
+	return { result, sections, ok: true, stopped: false };
+}
+
+function emptyResult(phase: Phase): PhaseResult {
+	return {
+		phase,
+		agent: phase,
+		model: "",
+		thinkingLevel: "off",
+		exitCode: 1,
+		messages: [],
+		stderr: "",
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+		fallbackUsed: false,
+		finalText: "",
+		errorMessage: "skipped",
+	};
+}
+
+function reportLinear(rc: RunCtx, phase: string, linearId: string | null, comment: string | undefined): void {
+	if (!rc.config.linear.enabled) return;
+	if (!comment?.trim()) {
+		rc.ctx.ui.notify(`${phase}: LINEAR_COMMENT が空です。Linear へは投稿していません。`, "warn");
+		rc.linearNotes.push(`- ${phase}: (empty)`);
+		return;
+	}
+	rc.linearNotes.push(`### ${phase}\n${comment.trim()}`);
+	const id = linearId ?? "(no id)";
+	rc.ctx.ui.notify(`${phase}: Linear (${id}) へは未投稿です。pi は Linear MCP 非対応。本文は完了報告と TASK_FILE に残しています。`, "warn");
+}
+
+function noteLinearStatus(rc: RunCtx, linearId: string | null, status: string): void {
+	if (!rc.config.linear.enabled) return;
+	const id = linearId ?? "(no id)";
+	rc.linearNotes.push(`- ${id} status: ${status}`);
+	rc.ctx.ui.notify(`Linear (${id}) のステータスを "${status}" に変更できません。手動で変更してください。`, "warn");
+}
+
+function persistLinear(ctx: any, file: string, h2: string, comment: string | undefined): boolean {
+	if (!comment?.trim()) return true;
+	return mutateTask(ctx, file, (content) => setLinearComment(content, h2, comment));
+}
+
+async function resolveGate1(
 	ctx: any,
-	args: string,
-	scope: "user" | "project" | "both",
-): Promise<OrchestrationState> {
+	config: OrchestratorConfig,
+	sections: Record<string, string>,
+	fallback: string,
+	revisions: number,
+): Promise<"auto-approved" | "approved" | "revised" | "abort" | "revise"> {
+	const token = gate1Token(sections.GATE1);
+	if (!config.gates.gate1 || config.gates.dontAsk) {
+		return revisions > 0 ? "revised" : "auto-approved";
+	}
+	if (token !== "needs-approval") return token;
+	const ok = await ctx.ui.confirm(
+		"Gate 1: 計画を承認しますか？",
+		`${planSummary(sections, fallback)}\n\n承認 → team-implement へ / 拒否 → 計画を差し戻す`,
+	);
+	if (ok) return revisions > 0 ? "revised" : "approved";
+	return "revise";
+}
+
+async function gate2(ctx: any, config: OrchestratorConfig, retryCount: number): Promise<"retry" | "abort"> {
+	if (!config.gates.gate2) return "abort";
+	if (retryCount >= config.gates.maxRetries) {
+		ctx.ui.notify(`Gate 2: 再実装の上限 (${config.gates.maxRetries}) に達しました。deploy しません。`, "warn");
+		return "abort";
+	}
+	if (config.gates.dontAsk) return "retry";
+	const choice = await ctx.ui.select("Gate 2: team-review が FAIL です", [
+		"retry: team-implement に戻して修正する",
+		"abort: 終了する（deploy しない）",
+	]);
+	if (choice?.startsWith("retry")) return "retry";
+	return "abort";
+}
+
+async function orchestrate(ctx: any, args: string, scope: "user" | "project" | "both"): Promise<OrchestrationState> {
 	const config = loadConfig();
 	const parsed = parseOrchestrateArgs(args);
 	const cwd = ctx.cwd;
+	const linearNotes: string[] = [];
+	const results: PhaseResult[] = [];
+	const budget = new BudgetTracker(config);
+	let gate1Outcome = "n/a";
+	let verdict: "PASS" | "FAIL" | "UNKNOWN" | "n/a" = "n/a";
+	let aborted = "";
+
+	const finish = (tier: Tier, linearId: string | null, taskFile: string): OrchestrationState => {
+		const report = formatReport({
+			title: parsed.taskDescription || "(no task)",
+			tier,
+			linearId,
+			taskFile,
+			results,
+			totalCost: budget.totalCost,
+			gate1: gate1Outcome,
+			verdict,
+			aborted,
+			linearNotes,
+		});
+		ctx.ui.notify(report, aborted ? "warn" : "info");
+		try {
+			(ctx as any).sessionManager?.appendEntry?.({
+				type: "orchestrator_state",
+				tier,
+				linearId,
+				taskFile,
+				totalCost: budget.totalCost,
+				phases: results.map((r) => r.phase),
+			});
+		} catch { /* best effort */ }
+		return { tier, linearId, taskFile, results, totalCost: budget.totalCost, report };
+	};
 
 	if (!parsed.taskDescription) {
 		ctx.ui.notify("Usage: /orchestrate <task description or Linear ID>", "error");
 		throw new Error("No task description");
 	}
 
-	// STEP 0: CLASSIFY
 	const estimate = parsed.tier
-		? { tier: parsed.tier, reason: `explicit --tier=${parsed.tier}`, fileTier: parsed.tier, complexityTier: parsed.tier, riskTier: parsed.tier, hardTrigger: false }
+		? { tier: parsed.tier, reason: `explicit --tier=${parsed.tier}` }
 		: classifyTier(parsed.taskDescription);
-	const tier = estimate.tier;
-	const dontAsk = parsed.dontAsk || config.gates.dontAsk;
-	if (dontAsk) config.gates.dontAsk = true;
+	let tier = estimate.tier;
+	if (parsed.dontAsk || config.gates.dontAsk) config.gates.dontAsk = true;
 
 	ctx.ui.notify(`Tier: ${tier} — ${estimate.reason}`, "info");
 
-	// XS → suggest direct implementation and stop
 	if (tier === "XS") {
-		ctx.ui.notify("tier=XS: 直接実装を推奨。team-implement のみ実行します。", "info");
+		const report = `## tier=XS\n\n/orchestrate は使いません。直接実装してください。\n\n- 判定: ${estimate.reason}`;
+		ctx.ui.notify(report, "info");
+		return { tier, linearId: detectLinearId(parsed.taskDescription, config), taskFile: "", results, totalCost: 0, report };
 	}
 
-	// STEP 1: LINEAR
-	const linearId = detectLinearId(parsed.taskDescription, config);
-	if (!linearId && config.linear.enabled) {
-		const ans = await ctx.ui.input("Linear タスク ID または URL（未入力でスキップ）:");
-		if (ans && ans.trim()) {
-			const m = ans.trim().match(new RegExp(config.linear.idPattern));
-			if (m) {
-				// detected
-			}
-		}
+	let linearId = detectLinearId(parsed.taskDescription, config);
+	if (!linearId && config.linear.enabled && !config.gates.dontAsk) {
+		const ans = await ctx.ui.input("Linear タスク ID または URL（空欄でスキップ）:");
+		const m = ans?.trim().match(new RegExp(config.linear.idPattern));
+		if (m) linearId = m[0];
+		else if (ans?.trim()) ctx.ui.notify(`Linear ID を検出できませんでした (${ans.trim()})。LOCAL ID で続行し、投稿できない旨を報告します。`, "warn");
+		else ctx.ui.notify("Linear ID なし。LOCAL ID で続行します。", "info");
+	} else if (!linearId && config.linear.enabled) {
+		ctx.ui.notify("Linear ID なし（dont-ask）。LOCAL ID で続行します。", "info");
 	}
 
-	// STEP 2: TASK FILE
-	const feature = featureSlug(parsed.taskDescription);
-	const taskFile = ensureTaskFile(cwd, config, linearId, feature);
+	const title = parsed.taskDescription.replace(/\s+/g, " ").trim().slice(0, 80);
+	const taskFile = ensureTaskFile(cwd, config, linearId, featureSlug(parsed.taskDescription), title, tier);
 	ctx.ui.notify(`Task file: ${taskFile}`, "info");
-	updateTaskFile(taskFile, { Meta: `- linear_id: ${linearId ?? "(none)"}\n- tier: ${tier}\n- created: ${new Date().toISOString()}\n- status: planning` });
+	if (!mutateTask(ctx, taskFile, (c) => setMetaFields(c, { tier, status: "planning" }))) {
+		aborted = "TASK_FILE を更新できませんでした。";
+		return finish(tier, linearId, taskFile);
+	}
 
-	// Setup
-	const phases = phasesForTier(tier);
+	const rc: RunCtx = { ctx, cwd, scope, config, budget, results, linearNotes, totalOverConfirmed: false };
+	const baseTask = `${parsed.taskDescription} --tier=${tier} --task-file=${taskFile} --linear-id=${linearId ?? "none"}`;
 
-	// PREFLIGHT: a blanked/misconfigured orchestrator.json would have every
-	// phase mark itself `skipped` and we'd ghost-complete with an empty summary
-	// and $0 — the exact silent-no-op failure we must surface loudly.
-	const runnablePhases = phases.filter((p) => {
+	const runnable = (["startproject", "team-implement", "team-review", "deploy"] as Phase[]).filter((p) => {
 		const m = config.tiers[tier][p];
 		return typeof m === "string" && m.trim().length > 0;
 	});
-	if (runnablePhases.length === 0) {
-		const cfgPath = getConfigPath();
-		const msg =
-			`orchestrate: no usable models configured for tier=${tier}.\n` +
-			`All phase models are null/blank in orchestrator.json, so every phase would be skipped and nothing would run.\n` +
-			`Model config: ${cfgPath}\n` +
-			`Fix: set valid model IDs (from \`pi --list-models\`) for tiers.${tier}.* and fallbackModel.`;
+	if (!runnable.includes("startproject")) {
+		const msg = `startproject の model がありません (tier=${tier})。計画なしでは実装しません。\n${getConfigPath()}`;
 		ctx.ui.notify(msg, "error");
 		throw new Error(msg);
 	}
 
-	const budget = new BudgetTracker(config);
-	const results: PhaseResult[] = [];
-	const taskArgs = `${parsed.taskDescription} --tier=${tier} --task-file=${taskFile} --linear-id=${linearId ?? "none"}`;
+	let taskArgs = baseTask;
+	let revisions = 0;
+	while (true) {
+		const planned = await executePhase(rc, "startproject", tier, taskArgs, ["BRIEF", "DESIGN", "PLAN"]);
+		if (!planned.ok) {
+			aborted = aborted || "startproject が完了しませんでした。";
+			return finish(tier, linearId, taskFile);
+		}
+		const wrote = mutateTask(ctx, taskFile, (c) => {
+			let next = setH3(c, "startproject", "Brief", planned.sections.BRIEF ?? "");
+			next = setH3(next, "startproject", "Design", planned.sections.DESIGN ?? "");
+			next = setH3(next, "startproject", "Plan", planned.sections.PLAN ?? "");
+			return next;
+		});
+		if (!wrote || !persistLinear(ctx, taskFile, "startproject", planned.sections.LINEAR_COMMENT)) {
+			aborted = "計画の書き込みに失敗しました。";
+			return finish(tier, linearId, taskFile);
+		}
+		reportLinear(rc, "startproject", linearId, planned.sections.LINEAR_COMMENT);
 
-	let implementResult: PhaseResult | null = null;
-	let reviewResult: PhaseResult | null = null;
-	let totalOverConfirmed = false; // user confirmed total-budget overrun once → don't re-prompt every phase
-
-	// Execute phases sequentially
-	for (const phase of phases) {
-		const phaseModel = resolvePhaseModel(config, tier, phase);
-		if (phaseModel.skipped) {
-			const intentional = config.tiers[tier][phase] === null;
-			if (intentional) {
-				ctx.ui.notify(`${phase}: skipped (model=null, tier=${tier})`, "info");
-			} else {
-				ctx.ui.notify(`${phase}: skipped — model is blank in orchestrator.json (tiers.${tier}.${phase})`, "warn");
+		const g1 = await resolveGate1(ctx, config, planned.sections, planned.result.finalText, revisions);
+		if (g1 === "revise") {
+			revisions++;
+			if (revisions > 2) {
+				aborted = "Gate 1: 差し戻し上限に達したため終了します。";
+				ctx.ui.notify(aborted, "warn");
+				return finish(tier, linearId, taskFile);
 			}
+			const feedback = (await ctx.ui.input("差し戻し理由（計画に反映します）:"))?.trim() || "方針を見直して再提出してください。";
+			taskArgs = `${baseTask}\n\n---\n前回の計画は差し戻されました。フィードバックを反映し、GATE1 を判断し直してください。\n\n${feedback}\n---`;
 			continue;
 		}
-
-		ctx.ui.setStatus("orchestrator", `${phase} running (${phaseModel.model})...`);
-
-		let result = await runPhase({
-			cwd,
-			scope,
-			phase,
-			agentName: phase,
-			phaseModel,
-			fallbackModel: config.fallbackModel,
-			fallbackThinking: config.fallbackThinkingLevel,
-			task: taskArgs,
-			signal: ctx.signal,
-			onUpdate: (text) => {
-				ctx.ui.setStatus("orchestrator", `${phase}: ${text.slice(0, 80)}...`);
-			},
-		});
-
-		budget.add(phase, result.usage.cost);
-		results.push(result);
-
-		ctx.ui.notify(summarizeResult(result), result.exitCode === 0 ? "info" : "warn");
-
-		// Budget check
-		const pc = budget.checkPhase(phase);
-		if (pc.over) ctx.ui.notify(`⚠ Budget: ${pc.msg}`, "warn");
-		else if (pc.warn) ctx.ui.notify(`Budget: ${pc.msg}`, "info");
-		const tc = budget.checkTotal();
-		if (tc.over && !totalOverConfirmed) {
-			ctx.ui.notify(`⚠ TOTAL BUDGET EXCEEDED: ${tc.msg}`, "error");
-			const stop = await ctx.ui.confirm("予算超過", "続行しますか？");
-			if (!stop) break;
-			totalOverConfirmed = true;
+		if (g1 === "abort") {
+			aborted = "Gate 1 で終了しました。";
+			return finish(tier, linearId, taskFile);
 		}
-
-		// Gate 1: after startproject
-		if (phase === "startproject") {
-			const plan = result.finalText.slice(0, 500);
-			const g1 = await gate1(ctx, config, plan);
-			if (g1.action === "abort") {
-				ctx.ui.notify("Gate 1 差し戻し: 終了します", "warn");
-				break;
-			}
-		}
-
-		// Track implement/review for Gate 3 retry
-		if (phase === "team-implement") implementResult = result;
-		if (phase === "team-review") reviewResult = result;
-
-		// Gate 3: after team-review FAIL
-		if (phase === "team-review") {
-			const verdict = reviewVerdict(result);
-			if (verdict === "FAIL") {
-				let retryCount = 0;
-				let g3 = await gate3(ctx, config, result, retryCount);
-				while (g3.action === "retry" && retryCount < config.gates.maxRetries) {
-					retryCount++;
-					ctx.ui.notify(`Gate 3 retry ${retryCount}/${config.gates.maxRetries}: team-implement → team-review（レビュー指摘を反映）`, "info");
-
-					// レビュー指摘を次の実装に引き継ぐ（フィードバック付き再実装）
-					const retryTask = buildRetryTask(taskArgs, reviewResult, retryCount);
-
-					// Re-run implement with review feedback
-					const implModel = resolvePhaseModel(config, tier, "team-implement");
-					implementResult = await runPhase({
-						cwd, scope, phase: "team-implement", agentName: "team-implement",
-						phaseModel: implModel, fallbackModel: config.fallbackModel, fallbackThinking: config.fallbackThinkingLevel,
-						task: retryTask, signal: ctx.signal,
-					});
-					budget.add("team-implement", implementResult.usage.cost);
-
-					// Re-run review（再実装されたコードを task-file から読み直して再判定）
-					const revModel = resolvePhaseModel(config, tier, "team-review");
-					reviewResult = await runPhase({
-						cwd, scope, phase: "team-review", agentName: "team-review",
-						phaseModel: revModel, fallbackModel: config.fallbackModel, fallbackThinking: config.fallbackThinkingLevel,
-						task: taskArgs, signal: ctx.signal,
-					});
-					budget.add("team-review", reviewResult.usage.cost);
-					results.push(implementResult, reviewResult);
-					if (reviewVerdict(reviewResult) !== "FAIL") break;
-					g3 = await gate3(ctx, config, reviewResult, retryCount);
-				}
-				if (g3.action === "abort") {
-					ctx.ui.notify("Gate 3: 終了します", "warn");
-					break;
-				}
-			}
-		}
-
-		ctx.ui.setStatus("orchestrator", "");
+		gate1Outcome = g1;
+		break;
 	}
 
-	// STEP 7: completion report
-	const totalCost = budget.totalCost;
-	const report = formatReport(tier, linearId, taskFile, results, totalCost);
-	ctx.ui.notify(report, "info");
-
-	// Persist state to session
-	try {
-		(ctx as any).sessionManager?.appendEntry?.({
-			type: "orchestrator_state",
-			tier,
-			linearId,
-			taskFile,
-			totalCost,
-			phases: results.map((r) => r.phase),
+	let escalations = 0;
+	noteLinearStatus(rc, linearId, "In Progress");
+	while (true) {
+		if (!mutateTask(ctx, taskFile, (c) => setMetaFields(c, { status: "implementing", tier }))) {
+			aborted = "status の更新に失敗しました。";
+			return finish(tier, linearId, taskFile);
+		}
+		const implTask = `${parsed.taskDescription} --tier=${tier} --task-file=${taskFile} --linear-id=${linearId ?? "none"}`;
+		const impl = await executePhase(rc, "team-implement", tier, implTask, ["IMPLEMENTATION_NOTES", "BRANCH", "BASE"]);
+		if (!impl.ok) {
+			aborted = aborted || "team-implement が完了しませんでした。";
+			return finish(tier, linearId, taskFile);
+		}
+		const esc = parseEscalation(impl.sections.ESCALATION);
+		const branch = firstLine(impl.sections.BRANCH);
+		const base = firstLine(impl.sections.BASE);
+		const notes = impl.sections.IMPLEMENTATION_NOTES?.trim();
+		const wrote = mutateTask(ctx, taskFile, (c) => {
+			let next = c;
+			if (branch || base) next = setMetaFields(next, { ...(branch ? { branch } : {}), ...(base ? { base } : {}) });
+			if (notes) next = appendRound(next, "team-implement", notes);
+			return next;
 		});
-	} catch { /* best effort */ }
+		if (!wrote || !persistLinear(ctx, taskFile, "team-implement", impl.sections.LINEAR_COMMENT)) {
+			aborted = "実装結果の書き込みに失敗しました。";
+			return finish(tier, linearId, taskFile);
+		}
+		reportLinear(rc, "team-implement", linearId, impl.sections.LINEAR_COMMENT);
 
-	return { tier, linearId, taskFile, results, totalCost };
+		if (!esc) break;
+		if (tierRank(esc.tier) <= tierRank(tier)) {
+			ctx.ui.notify(`ESCALATION が現在の tier 以下です (${esc.tier})。無視して続行します。`, "warn");
+			break;
+		}
+		escalations++;
+		if (escalations > 2) {
+			aborted = "エスカレーション上限に達したため終了します。作業ブランチの変更はそのままです。";
+			ctx.ui.notify(aborted, "warn");
+			return finish(tier, linearId, taskFile);
+		}
+		ctx.ui.notify(`Escalation: ${tier} → ${esc.tier} — ${esc.reason}`, "warn");
+		tier = esc.tier;
+		if (!mutateTask(ctx, taskFile, (c) => setMetaFields(c, { tier, status: "implementing" }))) {
+			aborted = "tier の更新に失敗しました。";
+			return finish(tier, linearId, taskFile);
+		}
+		taskArgs = `${parsed.taskDescription} --tier=${tier} --task-file=${taskFile} --linear-id=${linearId ?? "none"}\n\n---\n実装中に tier を ${tier} へ引き上げました。理由: ${esc.reason}\n作業ブランチ上の変更はやり直さず、計画だけ更新してください。\n---`;
+		revisions = 0;
+		let replanned = false;
+		while (!replanned) {
+			const planned = await executePhase(rc, "startproject", tier, taskArgs, ["BRIEF", "DESIGN", "PLAN"]);
+			if (!planned.ok) {
+				aborted = "エスカレーション後の startproject が完了しませんでした。";
+				return finish(tier, linearId, taskFile);
+			}
+			const planWrote = mutateTask(ctx, taskFile, (c) => {
+				let next = setH3(c, "startproject", "Brief", planned.sections.BRIEF ?? "");
+				next = setH3(next, "startproject", "Design", planned.sections.DESIGN ?? "");
+				next = setH3(next, "startproject", "Plan", planned.sections.PLAN ?? "");
+				return next;
+			});
+			if (!planWrote || !persistLinear(ctx, taskFile, "startproject", planned.sections.LINEAR_COMMENT)) {
+				aborted = "再計画の書き込みに失敗しました。";
+				return finish(tier, linearId, taskFile);
+			}
+			reportLinear(rc, "startproject", linearId, planned.sections.LINEAR_COMMENT);
+			const g1 = await resolveGate1(ctx, config, planned.sections, planned.result.finalText, revisions);
+			if (g1 === "revise") {
+				revisions++;
+				if (revisions > 2) {
+					aborted = "Gate 1: 差し戻し上限に達したため終了します。";
+					return finish(tier, linearId, taskFile);
+				}
+				const feedback = (await ctx.ui.input("差し戻し理由（計画に反映します）:"))?.trim() || "方針を見直して再提出してください。";
+				taskArgs = `${taskArgs}\n\n---\n再計画は差し戻されました。\n\n${feedback}\n---`;
+				continue;
+			}
+			gate1Outcome = g1;
+			replanned = true;
+		}
+	}
+
+	if (!mutateTask(ctx, taskFile, (c) => setMetaFields(c, { status: "reviewing" }))) {
+		aborted = "status の更新に失敗しました。";
+		return finish(tier, linearId, taskFile);
+	}
+
+	let retryCount = 0;
+	let reviewTask = `${parsed.taskDescription} --tier=${tier} --task-file=${taskFile} --linear-id=${linearId ?? "none"}`;
+	while (true) {
+		const rev = await executePhase(rc, "team-review", tier, reviewTask, ["VERDICT", "REVIEW"]);
+		if (!rev.ok) {
+			aborted = aborted || "team-review が完了しませんでした。";
+			return finish(tier, linearId, taskFile);
+		}
+		verdict = verdictOf(rev.sections);
+		const reviewBody = rev.sections.REVIEW?.trim() || rev.result.finalText.slice(0, 4000);
+		if (!mutateTask(ctx, taskFile, (c) => appendRound(c, "team-review", `Verdict: ${verdict}\n\n${reviewBody}`))) {
+			aborted = "レビュー結果の書き込みに失敗しました。";
+			return finish(tier, linearId, taskFile);
+		}
+		if (!persistLinear(ctx, taskFile, "team-review", rev.sections.LINEAR_COMMENT)) {
+			aborted = "レビューコメントの書き込みに失敗しました。";
+			return finish(tier, linearId, taskFile);
+		}
+		reportLinear(rc, "team-review", linearId, rev.sections.LINEAR_COMMENT);
+
+		if (verdict === "PASS") break;
+		if (verdict === "UNKNOWN") {
+			aborted = "VERDICT を判定できません。deploy しません。";
+			ctx.ui.notify(aborted, "error");
+			return finish(tier, linearId, taskFile);
+		}
+		const action = await gate2(ctx, config, retryCount);
+		if (action === "abort") {
+			aborted = "Gate 2: FAIL のため deploy せず終了します。";
+			ctx.ui.notify(aborted, "warn");
+			return finish(tier, linearId, taskFile);
+		}
+		retryCount++;
+		ctx.ui.notify(`Gate 2 retry ${retryCount}/${config.gates.maxRetries}: team-implement に戻します`, "info");
+		if (!mutateTask(ctx, taskFile, (c) => setMetaFields(c, { status: "implementing" }))) {
+			aborted = "status の更新に失敗しました。";
+			return finish(tier, linearId, taskFile);
+		}
+		const retryImpl = await executePhase(
+			rc,
+			"team-implement",
+			tier,
+			buildRetryTask(reviewTask, rev.result.finalText, retryCount),
+			["IMPLEMENTATION_NOTES", "BRANCH", "BASE"],
+		);
+		if (!retryImpl.ok) {
+			aborted = "差し戻し後の team-implement が完了しませんでした。";
+			return finish(tier, linearId, taskFile);
+		}
+		if (parseEscalation(retryImpl.sections.ESCALATION)) {
+			aborted = "差し戻し中に ESCALATION が返りました。作業ブランチは残しています。新しい tier で /orchestrate をやり直してください。";
+			ctx.ui.notify(aborted, "warn");
+			return finish(tier, linearId, taskFile);
+		}
+		const notes = retryImpl.sections.IMPLEMENTATION_NOTES?.trim();
+		if (notes && !mutateTask(ctx, taskFile, (c) => appendRound(c, "team-implement", notes))) {
+			aborted = "再実装結果の書き込みに失敗しました。";
+			return finish(tier, linearId, taskFile);
+		}
+		reportLinear(rc, "team-implement", linearId, retryImpl.sections.LINEAR_COMMENT);
+		persistLinear(ctx, taskFile, "team-implement", retryImpl.sections.LINEAR_COMMENT);
+		if (!mutateTask(ctx, taskFile, (c) => setMetaFields(c, { status: "reviewing" }))) {
+			aborted = "status の更新に失敗しました。";
+			return finish(tier, linearId, taskFile);
+		}
+		reviewTask = `${parsed.taskDescription} --tier=${tier} --task-file=${taskFile} --linear-id=${linearId ?? "none"}`;
+	}
+
+	if (!mutateTask(ctx, taskFile, (c) => setMetaFields(c, { status: "deploying" }))) {
+		aborted = "status の更新に失敗しました。";
+		return finish(tier, linearId, taskFile);
+	}
+	const dep = await executePhase(
+		rc,
+		"deploy",
+		tier,
+		`${parsed.taskDescription} --tier=${tier} --task-file=${taskFile} --linear-id=${linearId ?? "none"}`,
+		["DEPLOY"],
+	);
+	if (!dep.ok) {
+		aborted = aborted || "deploy が完了しませんでした。";
+		return finish(tier, linearId, taskFile);
+	}
+	if (!mutateTask(ctx, taskFile, (c) => setH2Body(c, "deploy", dep.sections.DEPLOY ?? ""))) {
+		aborted = "deploy 結果の書き込みに失敗しました。";
+		return finish(tier, linearId, taskFile);
+	}
+	if (!persistLinear(ctx, taskFile, "deploy", dep.sections.LINEAR_COMMENT)) {
+		aborted = "deploy コメントの書き込みに失敗しました。";
+		return finish(tier, linearId, taskFile);
+	}
+	reportLinear(rc, "deploy", linearId, dep.sections.LINEAR_COMMENT);
+	noteLinearStatus(rc, linearId, "In Review");
+	if (!mutateTask(ctx, taskFile, (c) => setMetaFields(c, { status: "in-review" }))) {
+		aborted = "status を in-review にできませんでした。";
+		return finish(tier, linearId, taskFile);
+	}
+
+	return finish(tier, linearId, taskFile);
 }
 
-function formatReport(tier: Tier, linearId: string | null, taskFile: string, results: PhaseResult[], totalCost: number): string {
+function formatReport(input: {
+	title: string;
+	tier: Tier;
+	linearId: string | null;
+	taskFile: string;
+	results: PhaseResult[];
+	totalCost: number;
+	gate1: string;
+	verdict: string;
+	aborted: string;
+	linearNotes: string[];
+}): string {
 	const lines = [
-		`## 完了: orchestrate (tier=${tier})`,
+		`## ${input.aborted ? "中断" : "完了"}: ${input.title}`,
 		``,
-		`- Linear: ${linearId ?? "(none)"}`,
-		`- Task File: ${taskFile}`,
-		`- Total cost: ${fmtCost(totalCost)}`,
-		``,
-		`### 各フェーズのサマリー`,
+		`- Linear: ${input.linearId ?? "(none)"}`,
+		`- Tier: ${input.tier}`,
+		`- Task File: ${input.taskFile || "(none)"}`,
+		`- Gate 1: ${input.gate1}`,
+		`- Review: ${input.verdict}`,
+		`- Total cost: ${fmtCost(input.totalCost)}`,
 	];
-	for (const r of results) {
-		lines.push(`- ${summarizeResult(r)}`);
+	if (input.aborted) lines.push(`- 停止理由: ${input.aborted}`);
+	lines.push(``, `### 各フェーズのサマリー`);
+	if (input.results.length === 0) lines.push("- (フェーズ未実行)");
+	for (const r of input.results) lines.push(`- ${summarizeResult(r)}`);
+	if (input.linearNotes.length > 0) {
+		lines.push(``, `### Linear（未投稿。pi は Linear MCP 非対応）`, ...input.linearNotes);
 	}
 	return lines.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Extension entry
-// ---------------------------------------------------------------------------
-
 export default function (pi: ExtensionAPI) {
-	// /orchestrate command — interactive entry point
 	pi.registerCommand("orchestrate", {
-		description: "Project orchestrator — classify tier, route models per phase, run startproject → implement → review → deploy",
+		description: "Classify tier, then startproject → team-implement → team-review → deploy. Orchestrator writes the task file.",
 		handler: async (args: string, ctx: any) => {
 			ctx.ui.notify("orchestrate 開始...", "info");
 			try {
-				const state = await orchestrate(ctx, args ?? "", "user");
-				return;
+				await orchestrate(ctx, args ?? "", "user");
 			} catch (e: any) {
 				ctx.ui.notify(`orchestrate error: ${e?.message ?? e}`, "error");
 			}
 		},
 	});
 
-	// orchestrate tool — callable by the LLM (e.g. via /orchestrate prompt template)
 	pi.registerTool({
 		name: "orchestrate",
 		label: "Orchestrate",
 		description:
-			"Run the full project orchestration workflow (startproject → team-implement → team-review → deploy) with per-phase model routing, tier classification, gates, and budget control. Pass the task description (optionally with a Linear ID like NSKETCH-573).",
+			"Run startproject → team-implement → team-review → deploy. Phase agents return payloads; this tool writes the task file, applies Gate 1/Gate 2, and does not post to Linear (that failure is reported).",
 		parameters: Type.Object({
 			task: Type.String({ description: "Task description, optionally including a Linear ID" }),
 			tier: Type.Optional(Type.String({ description: "Override tier: XS | S | M | L. Auto-classified if omitted." })),
-			dontAsk: Type.Optional(Type.Boolean({ description: "Auto-approve all gates. Default: false." })),
+			dontAsk: Type.Optional(Type.Boolean({ description: "Auto-approve Gate 1 and auto-retry Gate 2. Default: false." })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx: any) {
 			const argStr = [params.task, params.tier ? `--tier=${params.tier}` : "", params.dontAsk ? "--dont-ask" : ""].filter(Boolean).join(" ");
 			try {
 				const state = await orchestrate(ctx, argStr, "user");
-				const report = formatReport(state.tier, state.linearId, state.taskFile, state.results, state.totalCost);
 				return {
-					content: [{ type: "text", text: report }],
+					content: [{ type: "text", text: state.report }],
 					details: { tier: state.tier, linearId: state.linearId, taskFile: state.taskFile, totalCost: state.totalCost },
 				};
 			} catch (e: any) {
@@ -508,20 +839,18 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 		},
-		promptSnippet: "Run the full orchestration workflow with per-phase model routing.",
+		promptSnippet: "Run the project workflow. XS is refused. FAIL does not deploy.",
 		promptGuidelines: [
-			"Use the orchestrate tool when the user asks to run the full project workflow (plan → implement → review → deploy) for a task or Linear issue.",
+			"Use orchestrate for S/M/L work that should go plan → implement → review → deploy. Do not use it for XS (one file, no logic change).",
 		],
 	});
 
-	// after_provider_response — detect 429 on the main session too (belt & suspenders)
 	pi.on("after_provider_response", async (event: any, ctx: any) => {
 		if (event.status === 429) {
-			ctx.ui.notify("⚠ 429 rate limit on main session — consider /model to switch", "warn");
+			ctx.ui.notify("429 rate limit on main session — consider /model to switch", "warn");
 		}
 	});
 
-	// session_start — notify orchestrator is available
 	pi.on("session_start", async (_event: any, ctx: any) => {
 		const config = loadConfig();
 		const tiers = Object.keys(config.tiers).join("/");

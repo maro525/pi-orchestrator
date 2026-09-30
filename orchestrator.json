@@ -41,7 +41,7 @@
   },
   "gates": {
     "gate1": true,
-    "gate3": true,
+    "gate2": true,
     "dontAsk": false,
     "maxRetries": 1
   },

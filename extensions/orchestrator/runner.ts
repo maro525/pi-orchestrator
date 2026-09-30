@@ -224,10 +224,11 @@ async function spawnPhase(
 function getFinalText(msg: Message): string {
 	const content = msg.content;
 	if (typeof content === "string") return content;
+	const texts: string[] = [];
 	for (const part of content) {
-		if (part.type === "text") return part.text;
+		if (part.type === "text" && part.text) texts.push(part.text);
 	}
-	return "";
+	return texts.join("\n");
 }
 
 // ---------------------------------------------------------------------------

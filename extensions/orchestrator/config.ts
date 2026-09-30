@@ -33,7 +33,7 @@ export interface OrchestratorConfig {
 	};
 	gates: {
 		gate1: boolean;
-		gate3: boolean;
+		gate2: boolean;
 		dontAsk: boolean;
 		maxRetries: number;
 	};
@@ -60,7 +60,7 @@ const DEFAULT_CONFIG: OrchestratorConfig = {
 	fallbackModel: "",
 	fallbackThinkingLevel: "medium",
 	budget: { maxCostPerPhase: 1000, maxTotalCost: 10000, warnCostPerPhase: 500 },
-	gates: { gate1: true, gate3: true, dontAsk: false, maxRetries: 1 },
+	gates: { gate1: true, gate2: true, dontAsk: false, maxRetries: 1 },
 	hardTriggers: ["auth", "authentication", "db migration", "database migration", "payment", "billing", "public api", "core dependency", "schema change"],
 	taskFileDir: ".claude/docs/decisions",
 	linear: { enabled: true, idPattern: "[A-Z]+-[0-9]+" },
@@ -75,7 +75,12 @@ export function loadConfig(): OrchestratorConfig {
 	try {
 		const raw = fs.readFileSync(configPath, "utf-8");
 		const parsed = JSON.parse(raw);
-		return { ...DEFAULT_CONFIG, ...parsed, tiers: { ...DEFAULT_CONFIG.tiers, ...parsed.tiers }, gates: { ...DEFAULT_CONFIG.gates, ...parsed.gates }, budget: { ...DEFAULT_CONFIG.budget, ...parsed.budget } };
+		const parsedGates = parsed.gates ?? {};
+		const gates = { ...DEFAULT_CONFIG.gates, ...parsedGates };
+		if (parsedGates.gate2 === undefined && typeof parsedGates.gate3 === "boolean") {
+			gates.gate2 = parsedGates.gate3;
+		}
+		return { ...DEFAULT_CONFIG, ...parsed, tiers: { ...DEFAULT_CONFIG.tiers, ...parsed.tiers }, gates, budget: { ...DEFAULT_CONFIG.budget, ...parsed.budget } };
 	} catch {
 		return DEFAULT_CONFIG;
 	}
@@ -214,7 +219,6 @@ export function parseOrchestrateArgs(raw: string): OrchestrateArgs {
 // ---------------------------------------------------------------------------
 
 export function phasesForTier(tier: Tier): Phase[] {
-	const all: Phase[] = ["startproject", "team-implement", "team-review", "deploy"];
-	if (tier === "XS") return ["team-implement", "deploy"];
-	return all;
+	if (tier === "XS") return [];
+	return ["startproject", "team-implement", "team-review", "deploy"];
 }

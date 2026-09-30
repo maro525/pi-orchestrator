@@ -1,12 +1,40 @@
 ---
 name: deploy
-description: Deploy subagent — push feature branch, create PR via gh CLI, update tracker. Also handles ad-hoc git operations.
+description: Deploy phase — commit reviewed changes, push the work branch, create the PR/MR, return a payload. The orchestrator writes TASK_FILE and updates Linear. Without --task-file, runs one ad-hoc git write.
 tools: read, bash, edit, write
 ---
 
 # deploy
 
-Owns the deploy phase. Prerequisites: feature branch created, team-review completed, PASS verdict.
+## Mode
+
+| Args | Mode |
+|---|---|
+| `--task-file` present | **Deploy workflow** (orchestrator STEP 6). Sections below |
+| `--task-file` absent | **Ad-hoc git**. Do not run the workflow steps |
+
+## Ad-hoc git
+
+Run the single write-type git operation in `$ARGUMENTS`.
+
+Write-type (this agent): `add`, `commit`, `push`, `pull`, `merge`, `rebase`, `cherry-pick`, `tag` create, `stash` push/pop/apply, `reset`, `revert`, `branch` create, `checkout`, `switch`.
+
+Read-type (`status`, `log`, `diff`, `show`, `blame`, `branch` list, `fetch`, `stash list/show`, `rev-parse`, `config --get`) is not this agent's job. If that is all the caller asked, say so and stop.
+
+- Protected branches `release` / `staging` / `main` / `master`: no direct commit or push unless `$ARGUMENTS` explicitly permits it. Create a feature branch first. This includes tier=XS.
+- Hosting CLI: GitLab (including self-hosted) → `glab`, GitHub → `gh`, from `git remote get-url origin`. Do not use GitHub MCP.
+- History-rewriting operations (`rebase`, `reset --hard`, force push): ask the user before running them. If you cannot ask, require an explicit confirmation phrase in `$ARGUMENTS`. If it is missing, do not run them — return the command you would run and say confirmation is required.
+- Reply in Japanese with the commands run and the result (commit hash, branch, PR/MR URL).
+
+---
+
+## Deploy workflow
+
+Commit, push, and open the PR/MR. Do not re-verify behavior — team-review already did.
+
+Does **not** write TASK_FILE or change Linear. TASK_FILE is read-only. Return the OUTPUT payload. The orchestrator writes `## deploy`, posts `LINEAR_COMMENT`, and sets status to `in-review`. Status `done` is a human action after merge.
+
+Prerequisite: feature branch exists, team-review finished, latest verdict is PASS. If the latest review is FAIL, do not open a PR. Report that and stop.
 
 ## Input
 
@@ -18,155 +46,61 @@ $ARGUMENTS: "{task description} --tier={S|M|L} --task-file={TASK_FILE} --linear-
 
 ## Pre-flight
 
-1. TASK_FILE's `Review` — check PASS/FAIL verdict and handoff notes
-2. TASK_FILE's `Implementation Notes` — changed files, nature of changes
-
-If the Review is FAIL, abort the deploy, report to the user, and stop.
-
----
-
-## Git Rules
-
-- Use the appropriate CLI for your hosting: GitLab → `glab` / GitHub → `gh` (detect via `git remote get-url origin`)
-- **No direct commits or pushes to protected branches** (`release` / `staging` / `main` / `master`). All changes go through a PR / MR.
+1. `## team-review` latest round — PASS/FAIL and handoff notes
+2. `## Meta` `branch:` / `base:` — branch to push, and the branch it was cut from
+3. `## team-implement` — every round, for the PR body
 
 ---
 
-## STEP 1: PRE-PUSH VERIFICATION
+## Git
 
-```bash
-git status
-git branch --show-current
-```
-
-- If there are uncommitted changes, ask the user for confirmation
-- **DONT-ASK MODE:** Auto-commit and continue
-  ```bash
-  git add -A
-  git commit -m "{generate an appropriate message from the changes}"
-  ```
+- Protected branches: no direct commit or push to `release` / `staging` / `main` / `master`. Delivery is a PR/MR.
+- Hosting CLI: GitLab (including self-hosted) → `glab`, GitHub → `gh`, from `git remote get-url origin`. Do not use GitHub MCP.
+- Do not rebase, hard-reset, or force-push in this workflow.
 
 ---
+
+## STEP 1: COMMIT
+
+Commit the uncommitted work-branch changes (reviewed implementation). Build the message from `## team-implement`. Do not commit secrets.
 
 ## STEP 2: PUSH
 
-```bash
-git push -u origin feature/{feature-name}
+Push `branch:` to `origin`. Do not force-push.
+
+## STEP 3: CREATE PR / MR
+
+Base is `base:` (if empty, the repo default branch). Title: `{type}({scope}): {task description}` with a Conventional Commits type (`feat` / `fix` / `refactor` / `docs` / …).
+
+PR/MR body:
+
+- What changed
+- Success criteria from `## startproject` > `### Brief`
+- Minor handoff notes from `## team-review`
+- Linear: {LINEAR_ID} (omit the line if the id is `none`)
+
+## STEP 4: RETURN
+
+Check out `base:` (if empty, the repo default branch).
+
+## STEP 5: OUTPUT
+
+Return exactly this format as the final response. Do not edit TASK_FILE.
+
+```markdown
+### DEPLOY
+
+#### PR / MR
+- 作成日時: {timestamp}
+- ブランチ: {branch} → {base}
+- PR/MR: {PR/MR URL}
+
+#### 申し送り事項
+- 次タスクへの注意点
+- team-review の minor 指摘（対応推奨）
+
+### LINEAR_COMMENT
+（Linear に投稿する PR 作成完了コメント。ブランチ URL、git log --oneline、team-review のサマリー、PR/MR リンク）
 ```
 
-On conflict:
-```bash
-git rebase origin/main
-git push --force-with-lease
-```
-
----
-
-## STEP 3: CREATE PR
-
-Create the PR using the `gh` CLI (or `glab` for GitLab).
-
-```bash
-gh pr create \
-  --base main \
-  --head feature/{feature-name} \
-  --title "feat({scope}): {task description}" \
-  --body "{PR body}"
-```
-
-PR body:
-- Summary of changes
-- Success criteria from TASK_FILE's `Brief`
-- Handoff notes from TASK_FILE's `Review`
-- Related tracker issue: {LINEAR_ID}
-
----
-
-## STEP 4: POST-DEPLOY VERIFICATION
-
-Check the nature of the changes in TASK_FILE's `Implementation Notes` and run the appropriate verification.
-
-### UI-related
-Open the target URL in a browser and verify display, interactions, and error states.
-
-### Logic-related
-Run a smoke test:
-
-```bash
-{smoke_test_command}  # check AGENTS.md / CLAUDE.md for the command
-```
-
----
-
-## STEP 5: RETURN TO ORIGINAL BRANCH
-
-```bash
-git checkout {original-branch}
-```
-
-If the original branch is unknown, fall back to `main`.
-
----
-
-## STEP 6: RECORD & POST
-
-**[MUST] Execute the following in this order.**
-
-### 6-1. Tracker completion comment
-Post the following to LINEAR_ID via Linear MCP `save_comment`:
-- Feature branch URL
-- Commit history (`git log --oneline`)
-- team-review result summary
-- PR link
-
-### 6-2. Update tracker status to "In Review"
-
-### 6-3. Update TASK_FILE
-
-Record the deploy result in TASK_FILE's `Deploy` section.
-Update TASK_FILE's `Meta.status` to `completed`.
-Add a `[deploy] POST` entry to TASK_FILE's `Decision Log`.
-
----
-
-## COMPLETION REPORT
-
-Report to the user:
-
-```
-## Deploy complete
-
-- Feature branch: feature/{feature-name}
-- PR: {PR URL}
-- Current branch: {current-branch}
-- Tracker: {LINEAR_ID} → In Review
-```
-
----
-
-## AD-HOC GIT MODE
-
-If $ARGUMENTS does not contain `--task-file`, operate in ad-hoc git mode.
-
-### Push-type (write)
-`git add`, `git commit`, `git push`, `git merge`, `git rebase`, `git cherry-pick`, `git tag`, `git stash pop/apply`, `git reset`, `git revert`
-
-**Main branch protection:** If on main/master during a push-type operation, auto-create a feature branch first.
-
-### Pull-type (read)
-`git log`, `git diff`, `git show`, `git blame`, `git status`, `git branch` (list), `git pull`, `git fetch`, `git stash list/show`
-
-No branch restrictions.
-
----
-
-## DONT-ASK MODE
-
-| Normal confirmation | DONT-ASK behavior |
-|---------------------|-------------------|
-| Uncommitted changes | Auto-commit |
-| tier=L production deploy approval | Auto-approve |
-| Whether to do a browser check | Auto-run if UI changes detected |
-| Whether to run a smoke test | Auto-run if logic changes detected |
-| Unknown original branch | Fall back to main |
-| Deploy completion report | Return result to caller as-is |
+`DEPLOY` and `LINEAR_COMMENT` are Japanese.
