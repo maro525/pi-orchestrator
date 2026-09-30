@@ -25,11 +25,11 @@ Each phase runs as an **isolated pi subprocess** with its own context window, mo
 | **Per-phase model routing** | `orchestrator.json` → `tiers[tier][phase]` resolves a model per phase, spawned as isolated `pi` subprocesses |
 | **Per-phase thinking level** | `thinkingLevel[phase]` — e.g. plan at `high`, implement at `medium`, review at `high`, deploy at `low` |
 | **Tier classification** | Keyword heuristics + hard triggers (auth, DB migration, payment, public API, core deps → force L). Override with `--tier=` |
-| **Gate 1 (plan approval)** | Confirm dialog after `startproject` — approve, or send back for re-planning. `--dont-ask` auto-approves |
-| **Gate 3 (review FAIL)** | Select dialog → retry / continue / abort. **Retries re-implement with review feedback injected into the task**, then re-review (up to `maxRetries`) |
+| **Gate 1 (plan approval)** | startproject asks when it can, and returns `auto-approved` / `approved` / `revised`. The orchestrator does not ask again. It asks only for `needs-approval` (non-interactive subprocess). `--dont-ask` auto-approves |
+| **Gate 2 (review FAIL)** | Ask whether to return to team-implement. **FAIL does not deploy.** Retries append `### {n}回目` and re-review (up to `maxRetries`) |
 | **429 / error fallback** | Subprocess detects 429 rate-limit or hard error → auto-switches to `fallbackModel` and retries |
 | **Budget tracking** | Per-phase + total cost; warns on approach, confirms on overflow |
-| **State persistence** | Unified task file written to `.claude/docs/decisions/task-*.md` — shared SSoT across all phases |
+| **State persistence** | Phases return an OUTPUT payload. The orchestrator writes `.claude/docs/decisions/task-*.md` — shared SSoT. Status ends at `in-review`, not `done` |
 
 ### Editable behavior (the markdown layer)
 
@@ -82,7 +82,7 @@ Start (or restart) pi and run `/reload` to pick up the extension. You should see
   "fallbackModel": "provider/cheap-fast",
   "fallbackThinkingLevel": "medium",
   "budget": { "maxCostPerPhase": 0.8, "maxTotalCost": 3.0, "warnCostPerPhase": 0.4 },
-  "gates": { "gate1": true, "gate3": true, "dontAsk": false, "maxRetries": 1 },
+  "gates": { "gate1": true, "gate2": true, "dontAsk": false, "maxRetries": 1 },
   "hardTriggers": ["auth", "db migration", "payment", "public api", "core dependency"]
 }
 ```
@@ -108,14 +108,14 @@ Start (or restart) pi and run `/reload` to pick up the extension. You should see
 
 ### What happens
 
-1. **Classify** — tier is estimated from the task description (or your `--tier` override). Hard triggers force L.
+1. **Classify** — tier is estimated from the task description (or your `--tier` override). Hard triggers force L. **XS stops** — implement that directly.
 2. **Route** — a model is resolved per phase from `orchestrator.json`.
-3. **Plan** (`startproject`) — reads codebase, designs, writes plan to task file. **Gate 1** asks you to approve.
-4. **Implement** (`team-implement`) — codes the change, runs tests, writes to task file.
-5. **Review** (`team-review`) — parallel reviewers (Quality / Logic / Security / Simplify) judge PASS / FAIL.
-   - **FAIL** → **Gate 3** asks: retry (re-implement with feedback) / continue / abort.
-6. **Deploy** (`deploy`) — pushes feature branch, opens PR, updates tracker status.
-7. **Report** — final summary with per-phase cost, model, and outcome.
+3. **Plan** (`startproject`, read-only) — returns `BRIEF` / `DESIGN` / `PLAN`. The orchestrator writes them. **Gate 1** is inside startproject when it can ask; otherwise it returns `needs-approval` and the orchestrator asks once.
+4. **Implement** (`team-implement`) — codes on a feature branch, does **not** commit. Returns notes, branch, and base. An `ESCALATION` raises the tier and re-plans; finished code stays on the branch.
+5. **Review** (`team-review`) — S: self / M: +OpenCode + Security / L: +Simplify. Does not edit code. PASS / FAIL is appended as `### {n}回目`.
+   - **FAIL** → **Gate 2** asks whether to return to implement. Deploy does not run.
+6. **Deploy** (`deploy`) — commits the reviewed diff, pushes, opens the PR/MR against `base:`. No second verification pass.
+7. **Report** — Japanese summary. Linear comments are included, not posted (pi has no Linear MCP). Status is `in-review`.
 
 ## Structure
 

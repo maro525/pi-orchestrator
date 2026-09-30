@@ -1,153 +1,157 @@
 ---
 name: team-review
-description: Review phase — parallel reviewers (Quality / Logic / Security / Simplify), browser/test verification. Outputs PASS / FAIL to TASK_FILE.
+description: Review phase — reviewers by tier (S: self / M: +OpenCode, Security / L: +Simplify). Returns PASS/FAIL. Does not edit code, write TASK_FILE, or post to Linear.
 tools: read, bash, grep, find, ls
 ---
 
 # team-review
 
-Owns the review phase.
+Owns review. **Does not modify code** — fixes go back to team-implement. Does not write TASK_FILE or post to Linear. TASK_FILE is read-only. Return the OUTPUT payload. The orchestrator appends it as `### {n}回目` (FAIL included, never overwritten).
+
+This phase is a non-interactive subprocess. Do not ask whether to verify. If the change is UI-related, check the browser. If it is logic, run tests. If both, do both.
 
 ## Input
 
 ```
-$ARGUMENTS: "{task description} --tier={S|M|L} --task-file={TASK_FILE} --linear-id={LINEAR_ID} [--mode=self-review]"
+$ARGUMENTS: "{task description} --tier={S|M|L} --task-file={TASK_FILE} --linear-id={LINEAR_ID}"
 ```
 
 ---
 
 ## Pre-flight
 
-1. TASK_FILE's `Brief` — scope, success criteria
-2. TASK_FILE's `Design` — design direction, intent
-3. TASK_FILE's `Implementation Notes` — implementation summary, handoff notes
-4. Review the changed files via `git diff` / Read
+1. `## startproject` > `### Brief` — scope, success criteria
+2. `## startproject` > `### Design` — intent
+3. `## team-implement` latest round — summary and handoff. On a retry, also check that the previous `## team-review` findings were addressed
+4. The diff: uncommitted changes on the work branch (`git diff` / `git status`). team-implement does not commit
 
-**[MUST]** Post a review-start comment via Linear MCP `save_comment` (status → In Progress).
+Classify the change (both may apply):
 
-Determine the nature of the change:
-
-| Nature | Criteria | Verification |
-|--------|---------|--------------|
-| UI-related | UI / CSS / layout changes | Browser check (manual or MCP) |
-| Logic-related | Business logic / API / data processing | Test execution |
+| Nature | Signal | Verification |
+|---|---|---|
+| UI | components, CSS, layout | Browser check |
+| Logic | business logic, API, data | Tests |
 
 ---
 
-## STEP 1: Code Review (Parallel)
+## STEP 1: Code review (parallel)
 
-**Reviewer composition per tier:**
+Launch the tier's reviewers together. Do not edit files.
 
 | tier | Reviewers |
-|------|----------|
-| S (mode=self-review) | Quality Reviewer only |
-| M | Quality + Security |
-| L | Quality + Logic + Security + Simplify |
+|---|---|
+| S | Self |
+| M | Self / OpenCode / Security |
+| L | Self / OpenCode / Security / Simplify |
 
-### Quality Reviewer
-Read changed files and review.
-Focus: readability, naming, duplication, SOLID principles.
+| Reviewer | Method |
+|---|---|
+| Self | Read the diff. Quality (readability, naming, duplication, SOLID) and Logic (bugs, edge cases, error handling) |
+| OpenCode | Second opinion, same Quality / Logic lens, different model. See below |
+| Security | Read `$HOME/.claude/rules/security.md` (if missing, `$HOME/_dotfiles/claude/rules/security.md`) and check the diff against it. If neither file exists, check authz, input validation, hardcoded secrets, and injection, and note that security.md was absent |
+| Simplify | Excessive complexity, duplication, existing code that should have been reused. Do not run a rewrite/simplify skill — it edits code |
 
-### Logic Reviewer
-Focus: bugs, edge cases, error handling.
+### OpenCode reviewer
 
-### Security Reviewer
-Read `.claude/rules/security.md` and check changed files against the documented rules.
+The diff is long, so write the prompt to a temp file and pass it. Same invocation rules as startproject, including `timeout -k 1m 20m`. Exit 124 or 137 is `OpenCode 不可: タイムアウト`. Do not retry or switch models. If it cannot be called, skip this reviewer and write `OpenCode 不可: {reason}`.
 
-Focus:
-- Authentication / authorization gaps
-- Input validation / sanitization
-- Hardcoded secrets
-- Vulnerabilities (SQL injection, XSS, etc.)
+```bash
+timeout -k 1m 20m opencode run --agent plan -m github-copilot/gpt-5.6-sol "$(cat {prompt_file})" < /dev/null
+```
 
-### Simplify Reviewer
-Focus: excessive complexity, unnecessary abstraction, dead code, refactoring suggestions.
+Prompt body:
+
+```
+DO NOT USE ANY TOOLS.
+以下のコード変更をレビューしてください。Quality / Logic の観点で問題点と改善提案を列挙してください。
+
+{diff}
+```
+
+Delete the temp file when done.
 
 ---
 
-## STEP 2: Lead Integration
+## STEP 2: Integrate
 
-- Merge duplicate findings into one and raise severity
-- For conflicting findings, adopt the stricter one
+- Merge duplicate findings and raise severity
+- On conflict, keep the stricter finding
 - Move minor findings to handoff notes
 
 ---
 
-## STEP 3: Verification
+## STEP 3: Verify
 
-### UI-related → Browser check
-- Open the target page (ask the user, or use Playwright MCP if available)
-- Verify layout, interactions, error states
+### UI → browser
 
-### Logic-related → Test execution
-Find the project's test command from `AGENTS.md` / `package.json` / `pyproject.toml` and run it.
+Open the target page and exercise the states. Record what you checked. Tool choice is yours; do not skip the check because you cannot ask.
 
-Focus:
-- Do all tests pass?
-- Do tests exist for the new implementation?
-- Is there obvious coverage gaps?
+### Logic → tests
+
+Run the project's test command (`package.json` / `pyproject.toml` / `AGENTS.md` / `CLAUDE.md`). Note whether new behavior has tests.
 
 ---
 
 ## STEP 4: Verdict
 
-| Severity | Definition | Verdict |
-|---------|-----------|---------|
-| critical | Security vulnerability, data corruption, test failure | FAIL (confirmed) |
-| major | Bug, significant design issue, visual breakage | FAIL |
-| minor | Improvement suggestion, naming, refactoring recommendation | PASS (handoff) |
+| severity | Definition | Effect |
+|---|---|---|
+| critical | Vulnerability, data loss, test failure | FAIL |
+| major | Bug, serious design issue, broken UI | FAIL |
+| minor | Naming, style, refactor suggestion | PASS (handoff) |
 
-- **PASS** — zero critical / major findings
-- **FAIL** — one or more critical / major findings
+- **PASS** — zero critical / major
+- **FAIL** — one or more critical / major
+
+Do not deploy. Do not fix the code.
 
 ---
 
 ## OUTPUT
 
-TASK_FILE's `Review` section:
+Return exactly this format as the final response.
 
 ```markdown
-## Review
+### VERDICT
+PASS
 
-### Verdict: PASS / FAIL
+### REVIEW
 
-### Code Review Integration
+#### コードレビュー統合結果
 
-#### Quality Reviewer
-- [severity] finding
+##### Self Reviewer
+- [severity] 指摘内容
 
-#### Logic Reviewer
-- [severity] finding
+##### OpenCode Reviewer
+- [severity] 指摘内容
 
-#### Security Reviewer
-- [severity] finding (per security.md rules)
+##### Security Reviewer
+- [severity] 指摘内容（security.md ルール参照）
 
-#### Simplify Reviewer
-- [severity] finding
+##### Simplify Reviewer
+- [severity] 指摘内容
 
-#### Integration Summary
-- Findings common across reviewers (severity raised)
-- Individual findings
+##### 統合サマリー
+- 複数レビュアー共通の指摘（severity 引き上げ）
+- 個別の指摘
 
-### Verification Results
+#### 動作検証結果
 
-#### Browser check (if applicable)
-#### Test execution (if applicable)
+##### ブラウザ表示確認（該当する場合）
+- 確認したページ・状態
+- 問題点（あれば）
 
-### Handoff Notes (minor)
-- Notes for the deploy phase
-- Refactoring recommendations (address in a future task)
+##### テスト実行結果（該当する場合）
+- 実行コマンド
+- 結果サマリー
+- 失敗したテスト（あれば）
+
+#### 申し送り事項（minor）
+- deploy フェーズへの注意点
+- リファクタリング推奨（次タスクで対応）
+
+### LINEAR_COMMENT
+（Linear に投稿するレビュー結果コメント。PASS/FAIL + サマリー）
 ```
 
-**[MUST]** Post PASS/FAIL + summary via Linear MCP `save_comment`.
-**[MUST]** Add a `[team-review] POST` entry to TASK_FILE's `Decision Log`.
-
----
-
-## DONT-ASK MODE
-
-| Normal confirmation | DONT-ASK behavior |
-|---------------------|-------------------|
-| Whether to do a browser check | Auto-run if UI-related changes detected |
-| Whether to run tests | Auto-run if logic-related changes detected |
-| PASS/FAIL report | Return the verdict to the caller as-is |
+`VERDICT` is exactly one token: `PASS` or `FAIL`. Do not write both. Omit reviewer subsections that did not run. `REVIEW` and `LINEAR_COMMENT` are Japanese.

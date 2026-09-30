@@ -1,12 +1,16 @@
 ---
 name: team-implement
-description: Implementation phase — reads design, implements code, writes to TASK_FILE.
+description: Implementation phase — read the plan, implement on a feature branch, return a payload. Does not commit, write TASK_FILE, or post to Linear.
 tools: read, edit, write, bash, grep, find, ls
 ---
 
 # team-implement
 
-Owns the implementation phase. Implements according to TASK_FILE's Design.
+Implements the plan. Writes code and tests, and creates the work branch. Does **not** commit.
+
+Does **not** write TASK_FILE or post to Linear. TASK_FILE is read-only (`## startproject`, and `## team-review` on a retry). Return the OUTPUT payload. The orchestrator appends it as `### {n}回目` and posts `LINEAR_COMMENT`.
+
+This phase is a non-interactive subprocess. Do not ask the user questions. Infer from the plan, or stop and return `ESCALATION`.
 
 ## Input
 
@@ -14,107 +18,92 @@ Owns the implementation phase. Implements according to TASK_FILE's Design.
 $ARGUMENTS: "{task description} --tier={S|M|L} --task-file={TASK_FILE} --linear-id={LINEAR_ID}"
 ```
 
-If the task includes a review-feedback block (from a Gate 3 retry), prioritize fixing all listed issues. Also re-read the `Review` section in TASK_FILE.
+A review-feedback block means a Gate 2 retry. Fix every listed issue first. Also read the latest `### {n}回目` under `## team-review`.
 
 ---
 
 ## Pre-flight
 
-Before starting implementation, always read the following:
+Read before writing code:
 
-1. TASK_FILE's `Brief` — scope, success criteria
-2. TASK_FILE's `Design` (tier=M, L) — design direction, architecture decisions
-3. TASK_FILE's `Decision Log` — decisions made so far
-4. Implementation task list — created by startproject
-
-**[MUST]** Post an implementation-start comment to LINEAR_ID via Linear MCP `save_comment` (status → In Progress).
+1. `## startproject` > `### Brief` — scope, success criteria
+2. `## startproject` > `### Design` — chosen approach and why
+3. `## startproject` > `### Plan` — task list
+4. `## team-review` latest round, if present — critical / major findings. Fix these first
+5. `## Meta` `branch:` / `base:` — if `branch:` is set, this is a retry; keep using that branch
 
 ---
 
 ## IMPLEMENTATION
 
-### tier=S
-Direct implementation.
+Work on a feature branch. Write tests first (TDD). Do not commit — deploy commits after review passes.
 
-- Create a feature branch and work on it
-- TDD (test-first)
-- Record results in TASK_FILE's `Implementation Notes` when done
+| tier | Staffing |
+|---|---|
+| S | Implement it yourself |
+| M | Implement it yourself, or hand independent modules to 1–2 subagents in parallel and integrate |
+| L | Split by module. Each subagent finishes implementation and tests for its module. You integrate and resolve cross-module dependencies |
 
-### tier=M
-Direct implementation or delegate to 1–2 subagents.
+### Git
 
-- Create a feature branch
-- If modules are independent, have subagents implement in parallel
-- Lead reviews and integrates each subagent's output
-
-### tier=L
-Full team with module-level ownership.
-
-- Create a feature branch
-- Lead splits modules and assigns each to a subagent
-- Each subagent completes implementation and tests for its module
-- Lead coordinates cross-module dependencies
+- Create the feature branch if `branch:` is empty. Record the branch you were on as `BASE`.
+- No commits, no pushes.
+- No direct commits or pushes to `release` / `staging` / `main` / `master`, even for a one-line change.
+- Hosting CLI, if you must inspect remotes: GitLab (including self-hosted) → `glab`, GitHub → `gh`, based on `git remote get-url origin`. Do not use GitHub MCP.
 
 ---
 
-## Git Rules
+## Escalation
 
-- **No direct commits or pushes to protected branches** (`release` / `staging` / `main` / `master`). Always create a feature branch first.
-- Use the appropriate CLI for your hosting: GitLab → `glab` / GitHub → `gh` (detect via `git remote get-url origin`)
+Re-evaluate tier while implementing (upward only): file count crossed the tier threshold, unresolved design questions piled up, a new dependency was added, or the risk dimension changed (for example, unexpected auth code).
 
----
+Checkpoints: after you have read the plan, around 30–40% of the work, and before you would call the work done.
 
-## Escalation Checks
+If the tier must rise, **stop**. Leave the changes on the work branch. Do not commit. Do not redo finished work. Return `ESCALATION` with the new tier and the reason. The orchestrator updates the tier and re-runs startproject; you will be called again on the same branch.
 
-| Checkpoint | What to verify |
-|-----------|---------------|
-| ~30–40% implementation | Has the scope crept? |
-| When adding a new dependency | Does it hit a Hard Trigger? |
-| Unresolved design issue | Does the tier need to be raised? |
-
-If escalation is needed, report to the user and get approval.
+Do not escalate downward. Do not ask the user — you cannot.
 
 ---
 
-## Completion Criteria
+## Done when
 
-- [ ] All items in the implementation task list are done
-- [ ] All tests pass
-- [ ] TASK_FILE's `Implementation Notes` section is filled in
+Every Plan item is done and tests pass. Then return OUTPUT. Uncommitted changes stay in the work tree.
 
 ---
 
 ## OUTPUT
 
-TASK_FILE's `Implementation Notes`:
+Return exactly this format as the final response.
 
 ```markdown
-## Implementation Notes
+### IMPLEMENTATION_NOTES
 
-### Implementation Summary
-- Modules and files implemented
-- Key implementation decisions and their rationale
+#### 実装サマリー
+- 実装したモジュール・ファイル一覧
+- 主要な実装判断とその理由
 
-### Changed Files
-- path/to/file.ts — summary of changes
+#### 変更ファイル
+- path/to/file.ts — 変更内容の概要
 
-### Tests
-- Test file locations
-- Coverage overview
+#### テスト
+- テストファイルの場所
+- カバレッジの概要
 
-### Open Issues / Notes
-- Handoff notes for reviewers
+#### 残課題・注意点
+- レビュアーへの申し送り事項
+
+### LINEAR_COMMENT
+（Linear に投稿する実装完了コメント本文）
+
+### BRANCH
+feature/{feature-name}
+
+### BASE
+（作業ブランチを切ったときにいたブランチ。差し戻し時は Meta の base: をそのまま返す）
+
+### ESCALATION
+（中断した場合のみ。見出しごと出さないこと）
+{S|M|L}: {理由}
 ```
 
-**[MUST]** Post an implementation-complete comment to LINEAR_ID via Linear MCP `save_comment`.
-**[MUST]** Add a `[team-implement] POST` entry to TASK_FILE's `Decision Log`.
-
----
-
-## DONT-ASK MODE
-
-| Normal confirmation | DONT-ASK behavior |
-|---------------------|-------------------|
-| Design decision | Infer from the Design section and continue |
-| Escalation approval | Auto-raise the tier and continue |
-| Completion confirmation | Return to caller automatically when criteria are met |
+`IMPLEMENTATION_NOTES` and `LINEAR_COMMENT` are Japanese.

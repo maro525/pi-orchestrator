@@ -37,8 +37,8 @@
     "gates": {
       "type": "object",
       "properties": {
-        "gate1": { "type": "boolean", "description": "Plan approval gate after startproject." },
-        "gate3": { "type": "boolean", "description": "Review FAIL gate — ask user." },
+        "gate1": { "type": "boolean", "description": "Show the plan-approval dialog when startproject returns needs-approval. The phase judges; this process presents the dialog." },
+        "gate2": { "type": "boolean", "description": "On review FAIL, ask whether to return to team-implement. FAIL never deploys. gate3 is a deprecated alias." },
         "dontAsk": { "type": "boolean", "description": "Auto-approve all gates." },
         "maxRetries": { "type": "integer", "description": "Auto-retry on review FAIL before giving up." }
       }
